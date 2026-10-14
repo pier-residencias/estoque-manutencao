@@ -1223,7 +1223,7 @@ const linkSistema = aba => location.origin + location.pathname + "#" + aba;
 function msgWhats(tipo, x){
   const quem = primeiroNome(x.responsavel);
   const linhas = [
-    `Olá${quem ? ", "+quem : ""}! ${tipo==="os" ? "Uma ordem de serviço foi atribuída a você" : "Você recebeu uma demanda"} no Pier Manutenção:`,
+    `Olá${quem ? ", "+quem : ""}! ${tipo==="os" ? "Uma ordem de serviço foi atribuída a você" : "Você recebeu uma demanda"} no Pier Gestão:`,
     `*${x.numero} · ${x.titulo}*`,
     x.local ? `Local: ${x.local}` : "",
     `Prioridade: ${x.prioridade||"Normal"} · Prazo: ${fData(x.prazo)}`,

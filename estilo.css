@@ -191,8 +191,9 @@ td .sub{display:block;font-size:.8rem;color:var(--muted)}
 .login .card .stripe{height:6px}
 .login .logo-login{display:block;width:min(260px,80%);height:auto;margin:4px auto 6px}
 .login .inner{padding:22px 22px 24px;display:grid;gap:14px}
-.login h2{margin:0;font-family:var(--f-display);font-weight:700;font-size:1.8rem;line-height:1;text-transform:uppercase;letter-spacing:.01em}
+.login h2{margin:0;text-align:center;font-family:var(--f-display);font-weight:700;font-size:1.8rem;line-height:1;text-transform:uppercase;letter-spacing:.01em}
 .login p{margin:0;color:var(--muted);font-size:.9rem}
+.login .inner > p{text-align:center}
 .me .sair{background:none;border:0;padding:0;color:var(--muted);font-size:.8rem;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .sync{font-size:.78rem;color:var(--muted);white-space:nowrap}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:gira .8s linear infinite;vertical-align:-2px}
@@ -337,3 +338,5 @@ td.mono{white-space:nowrap}
   .aviso-item{grid-template-columns:auto minmax(0,1fr)}
   .aviso-item .ai-p{grid-column:2}
 }
+.login #l-entrar{width:100%}
+.login .actions .hint{width:100%;text-align:center}

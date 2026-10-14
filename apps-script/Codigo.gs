@@ -1,5 +1,5 @@
 /**
- * Pier Manutenção — banco de dados na planilha do Google.
+ * Pier Gestão — banco de dados na planilha do Google.
  *
  * Como instalar (uma vez só):
  *  1. Abra a planilha "Estoque da Manutenção" no Google Drive.
@@ -111,7 +111,7 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 // ---------- entrada da web ----------
 
 function doGet() {
-  return json({ ok: true, app: 'Pier Manutenção' });
+  return json({ ok: true, app: 'Pier Gestão' });
 }
 
 function doPost(e) {
