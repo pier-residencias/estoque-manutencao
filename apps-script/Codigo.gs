@@ -185,7 +185,7 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
-const VERSAO = '2026-10-15 acessos e subitens';
+const VERSAO = '2026-10-15 numeração';
 
 function doGet() {
   return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
@@ -1764,12 +1764,42 @@ function pendLista() {
   const t = tabela('pend');
   let lista = linhas(t);
   if (!lista.length && pendSemear(t)) lista = linhas(t);
+  if (pendNumerarSemNumero(t, lista)) lista = linhas(t);
   return lista
     .map(p => ({ id: p.id, secao: p.secao, numero: p.numero, titulo: p.titulo, status: p.status, responsavel: p.responsavel,
       prazo: p.prazo, obs: p.obs, ordem: p.ordem, atualizadoEm: p.atualizadoEm, atualizadoPor: p.atualizadoPor,
       criadaPor: p.criadaPor, origem: p.origem, vistaEm: p.vistaEm, vistaPor: p.vistaPor, criticidade: p.criticidade,
       tipo: p.tipo, frequencia: p.frequencia, ultimaVez: p.ultimaVez, execucoes: p.execucoes, pai: p.pai }))
     .sort((a, b) => (Number(a.ordem) || 1e9) - (Number(b.ordem) || 1e9));
+}
+
+// Itens principais sem número (como o "Vazamento no jardim", que veio solto no e-mail do síndico):
+// a seção é renumerada em sequência, na ordem da lista, e os subitens acompanham o novo número.
+function pendNumerarSemNumero(t, lista) {
+  const principais = lista.filter(p => !p.pai && String(p.numero).indexOf('.') < 0);
+  const secoes = PEND_SECOES.filter(s => principais.some(p => p.secao === s && !String(p.numero).trim()));
+  if (!secoes.length) return false;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    secoes.forEach(s => {
+      const daSecao = lista.filter(p => p.secao === s);
+      const itens = principais.filter(p => p.secao === s).sort((a, b) => (Number(a.ordem) || 0) - (Number(b.ordem) || 0));
+      itens.forEach((p, i) => {
+        const novo = String(i + 1);
+        const filhos = filhosDe(daSecao, p);
+        if (String(p.numero) !== novo) gravar(t, { numero: novo }, p._row);
+        filhos.forEach(f => {
+          const suf = String(f.numero).indexOf('.') >= 0 ? String(f.numero).split('.').slice(1).join('.') : '';
+          if (suf && String(f.numero) !== novo + '.' + suf) gravar(t, { numero: novo + '.' + suf, pai: p.id }, f._row);
+        });
+      });
+    });
+    SpreadsheetApp.flush();
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function pendSemear(t) {
