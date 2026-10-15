@@ -26,7 +26,7 @@ const API = (window.ESTOQUE_API_URL || "").trim();
 const S = {
   usuario:"", nome:"", senha:"", perfil:"", perms:{}, rel:null, eq:null, dashPreset:"mes", itens:new Map(), emprestimos:[], movs:[],
   tab:"painel", tipo:"saida", picked:null, iStatus:"", hTipo:"", histMes:mesDe(), ocupado:false, ultima:null,
-  os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null
+  os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null, nfLida:null
 };
 const can = p => !!(S.perms && S.perms[p]);
 const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"]};
@@ -1558,7 +1558,12 @@ const idsNF = v => { const s = String(v||""), l = s.match(/\/d\/([A-Za-z0-9_-]{1
 function renderNfAnexo(){
   const lista = $("#m-nf-lista"); if (!lista) return;
   if (S.nfArq.length) {
-    lista.innerHTML = S.nfArq.map((f,i) => `<span class="nf-chip">${f.type==="application/pdf" ? "PDF" : "Foto"} · ${esc(f.name.length>28 ? f.name.slice(0,25)+"…" : f.name)} <button type="button" class="link small-link" data-nfx="${i}" aria-label="Tirar ${esc(f.name)}">tirar</button></span>`).join("");
+    const L = S.nfLida;
+    lista.innerHTML = S.nfArq.map((f,i) => `<span class="nf-chip">${f.type==="application/pdf" ? "PDF" : "Foto"} · ${esc(f.name.length>28 ? f.name.slice(0,25)+"…" : f.name)} <button type="button" class="link small-link" data-nfx="${i}" aria-label="Tirar ${esc(f.name)}">tirar</button></span>`).join("")
+      + (L && L.arquivo && S.nfArq.includes(L.arquivo) ? (L.lendo ? `<span class="nf-chip"><span class="spin" aria-hidden="true"></span> Lendo os itens da nota…</span>`
+        : L.erro ? `<span class="nf-chip">${esc(L.erro)}</span>`
+        : `<button type="button" class="btn primary small" id="m-nf-ler">Conferir e registrar ${L.dados.itens.length} ${L.dados.itens.length===1?"item":"itens"} da nota${L.dados.numero ? " " + esc(L.dados.numero) : ""}</button>`) : "");
+    const b = $("#m-nf-ler"); if (b) b.onclick = () => abrirLote();
   } else if (nfAnexoValido()) {
     const n = S.nfAnexo.ids.length;
     lista.innerHTML = `<span class="nf-chip ok">A nota ${esc($("#m-nf").value.trim())} já anexada (${n} arquivo${n===1?"":"s"}) vai junto neste item <button type="button" class="link small-link" data-nfx="reuso">não usar</button></span>`;
@@ -1570,10 +1575,13 @@ $("#m-nf-arq").addEventListener("change", () => {
   if (grande) toast(`O PDF ${grande.name} passa de 7 MB. Tire uma foto da nota no lugar.`, true);
   S.nfArq = S.nfArq.concat(novos.filter(f => f !== grande)).slice(0, 4);
   $("#m-nf-arq").value = ""; renderNfAnexo();
+  const pdf = S.nfArq.find(f => f.type === "application/pdf");
+  if (pdf && (!S.nfLida || S.nfLida.arquivo !== pdf)) lerNotaPDF(pdf);
 });
 $("#m-nf-lista").addEventListener("click", e => {
   const b = e.target.closest("[data-nfx]"); if (!b) return;
   if (b.dataset.nfx === "reuso") S.nfAnexo = null; else S.nfArq.splice(Number(b.dataset.nfx), 1);
+  if (S.nfLida && !S.nfArq.includes(S.nfLida.arquivo)) S.nfLida = null;
   renderNfAnexo();
 });
 ["#m-forn","#m-nf"].forEach(sel => $(sel).addEventListener("input", renderNfAnexo));
@@ -1596,6 +1604,144 @@ async function enviarNF(arquivos, nf, fornecedor, msgEl){
   }
   return ids;
 }
+// ---------- leitura dos itens da nota (PDF da DANFE) ----------
+const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+let pdfPronto = null;
+function carregarPDFjs(){
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (!pdfPronto) pdfPronto = new Promise((ok, erro) => {
+    const s = document.createElement("script"); s.src = PDFJS + "pdf.min.js";
+    s.onload = () => { const t0 = Date.now(); (function esperar(){
+      if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js"; ok(window.pdfjsLib); }
+      else if (Date.now() - t0 > 8000) { pdfPronto = null; erro(new Error("leitor")); }
+      else setTimeout(esperar, 50); })(); };
+    s.onerror = () => { pdfPronto = null; erro(new Error("leitor")); };
+    document.head.appendChild(s);
+  });
+  return pdfPronto;
+}
+async function lerNotaPDF(file){
+  S.nfLida = {arquivo:file, lendo:true}; renderNfAnexo();
+  let dados = null, erro = "";
+  try {
+    const lib = await carregarPDFjs();
+    const doc = await lib.getDocument({data: new Uint8Array(await file.arrayBuffer())}).promise;
+    const pags = [];
+    for (let i = 1; i <= Math.min(doc.numPages, 10); i++) { const p = await doc.getPage(i); pags.push((await p.getTextContent()).items); }
+    dados = LeitorNF.lerDanfe(LeitorNF.montarLinhas(pags));
+    if (!dados.itens.length) erro = pags.some(p => p.length > 20) ? "Não encontrei a lista de produtos neste PDF. Lance os itens à mão." : "Este PDF é uma imagem, sem texto para ler. Lance os itens à mão.";
+  } catch(e){ erro = e && e.message === "leitor" ? "Não deu para carregar o leitor de PDF. Verifique a internet." : "Não consegui ler este PDF. Lance os itens à mão."; }
+  if (!S.nfLida || S.nfLida.arquivo !== file) return;
+  S.nfLida = {arquivo:file, dados, erro};
+  if (dados) {
+    if (dados.fornecedor && !$("#m-forn").value.trim()) $("#m-forn").value = dados.fornecedor;
+    if (dados.numero && !$("#m-nf").value.trim()) $("#m-nf").value = dados.numero;
+  }
+  renderNfAnexo();
+}
+const mapaNF = { ler(){ try { return JSON.parse(localStorage.getItem("nf-mapa")||"{}"); } catch(e){ return {}; } },
+  gravar(m){ try { localStorage.setItem("nf-mapa", JSON.stringify(m)); } catch(e){} } };
+const chaveProduto = (forn, it) => norm(forn).replace(/[^a-z0-9]/g,"") + "|" + (it.codigo && it.codigo.length >= 6 ? it.codigo : norm(it.descricao));
+const fValorNF = v => { let t = (Number(v)||0).toFixed(4).replace(/0{1,2}$/, ""); return t.replace(".", ","); };
+const nomeDeNota = d => { const s = String(d||"").toLowerCase().replace(/\s+/g," ").trim(); return s.charAt(0).toUpperCase() + s.slice(1); };
+function abrirLote(){
+  const L = S.nfLida; if (!L || !L.dados) return;
+  const N = L.dados, todos = itensArr(), mapa = mapaNF.ler(), podeNovo = can("itens_cadastrar");
+  const forn = $("#m-forn").value.trim() || N.fornecedor, nf = $("#m-nf").value.trim() || N.numero;
+  const linhas = N.itens.map((it, i) => {
+    const sug = LeitorNF.sugerir(it.descricao, todos, 5);
+    const lembrado = mapa[chaveProduto(forn, it)];
+    let sel = "";
+    if (lembrado && S.itens.has(lembrado)) sel = lembrado;
+    else if (sug.length && sug[0].nota >= 0.35 && (!sug[1] || sug[0].nota - sug[1].nota >= 0.08)) sel = sug[0].it.id;
+    else if ((!sug.length || sug[0].nota < 0.3) && podeNovo) sel = "__novo";
+    const opt = i2 => `<option value="${esc(i2.id)}" ${i2.id===sel?"selected":""}>${esc((i2.codigo?i2.codigo+" · ":"") + i2.nome)} (${fNum(i2.qtd)} ${esc(i2.unidade||"")})</option>`;
+    const sugIds = new Set(sug.map(x => x.it.id)); if (lembrado) sugIds.add(lembrado);
+    const topo = [...sugIds].map(id => S.itens.get(id)).filter(Boolean);
+    return `<div class="lote-item" data-i="${i}">
+      <label class="lote-top"><input type="checkbox" data-k="usar" checked> <span><b>${esc(it.descricao)}</b><span class="sub">${it.codigo ? "cód. " + esc(it.codigo) + " · " : ""}${fNum(it.qtd)} ${esc(it.unidade)} × ${fBRL(it.valorUnit)} = ${fBRL(it.valorTotal)}</span></span></label>
+      <div class="lote-campos">
+        <div class="field"><label for="lt-it-${i}">Item do estoque</label><select class="input" id="lt-it-${i}" data-k="item">
+          <option value="" ${sel===""?"selected":""}>Escolha o item do estoque…</option>
+          ${topo.length ? `<optgroup label="Mais parecidos">${topo.map(opt).join("")}</optgroup>` : ""}
+          ${podeNovo ? `<option value="__novo" ${sel==="__novo"?"selected":""}>+ Cadastrar como item novo: ${esc(nomeDeNota(it.descricao))}</option>` : ""}
+          <optgroup label="Todos os itens">${todos.filter(x => !sugIds.has(x.id)).map(opt).join("")}</optgroup>
+        </select></div>
+        <div class="field"><label for="lt-q-${i}">Quantidade</label><input class="input num" id="lt-q-${i}" data-k="qtd" inputmode="decimal" value="${esc(fNum(it.qtd))}"></div>
+        <div class="field"><label for="lt-v-${i}">Valor unitário (R$)</label><input class="input num" id="lt-v-${i}" data-k="valor" inputmode="decimal" value="${esc(fValorNF(it.valorUnit))}"></div>
+      </div>
+      <span class="hint lote-st"></span>
+    </div>`;
+  }).join("");
+  const soma = N.itens.reduce((t, it) => t + (Number(it.valorTotal)||0), 0);
+  $("#modal-box").innerHTML = `
+    <h3>Itens da nota${nf ? " " + esc(nf) : ""}</h3>
+    <p class="muted" style="margin:-6px 0 14px">${esc([forn, N.data ? "emitida em " + fData(N.data) : "", N.valorTotal != null ? "total " + fBRL(N.valorTotal) : ""].filter(Boolean).join(" · "))}. Confira cada linha e escolha o item do estoque correspondente.</p>
+    <form class="form" id="f-lote" novalidate autocomplete="off">
+      <div class="field"><label for="lt-forn">Fornecedor</label><input class="input" id="lt-forn" value="${esc(forn)}" list="dl-forn"></div>
+      <div class="field"><label for="lt-nf">Nota fiscal</label><input class="input" id="lt-nf" value="${esc(nf)}"></div>
+      <div class="field"><label for="lt-data">Data da entrada</label><input class="input" type="date" id="lt-data" value="${esc(N.data || $("#m-data").value || hoje())}"></div>
+      <div class="field"><label for="lt-rec">Quem recebeu</label><input class="input" id="lt-rec" value="${esc($("#m-recebeu").value.trim() || S.nome)}" list="dl-resp"></div>
+      <div class="full lote">${linhas}</div>
+      <p class="hint full">${N.itens.length===1 ? "1 item lido" : N.itens.length + " itens lidos"}, somando ${fBRL(soma)}${N.valorTotal != null && Math.abs(soma - N.valorTotal) > 0.05 ? ` · o total da nota é ${fBRL(N.valorTotal)} (pode haver frete ou desconto)` : ""}. A nota fica anexada em cada entrada.</p>
+      <div class="full actions"><button class="btn primary" type="submit" id="lt-ok">Registrar entradas</button><button class="btn" type="button" id="lt-no">Cancelar</button><span class="hint" id="lt-msg"></span></div>
+    </form>`;
+  $("#modal-box").classList.add("largo");
+  $("#modal").hidden = false;
+  $("#lt-no").onclick = fecharModal;
+  const contar = () => { const n = $$("#f-lote [data-k=usar]").filter(c => c.checked && !c.disabled).length; $("#lt-ok").textContent = n ? `Registrar ${n} ${n===1?"entrada":"entradas"}` : "Nenhum item marcado"; $("#lt-ok").disabled = !n; };
+  $$("#f-lote [data-k=usar]").forEach(c => c.addEventListener("change", () => { c.closest(".lote-item").classList.toggle("off", !c.checked); contar(); }));
+  contar();
+  $("#f-lote").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const msg = $("#lt-msg"); msg.className = "hint err";
+    const fornecedor = $("#lt-forn").value.trim(), numero = $("#lt-nf").value.trim(), data = $("#lt-data").value || hoje(), receb = $("#lt-rec").value.trim();
+    const filas = $$("#f-lote .lote-item").map(el => ({el, it: N.itens[Number(el.dataset.i)], usar: $("[data-k=usar]", el), sel: $("[data-k=item]", el).value, qtd: pQtd($("[data-k=qtd]", el).value), valor: $("[data-k=valor]", el).value.trim()}))
+      .filter(f => f.usar.checked && !f.usar.disabled);
+    const falta = filas.find(f => !f.sel); if (falta) { msg.textContent = `Escolha o item do estoque para "${falta.it.descricao}".`; $("[data-k=item]", falta.el).focus(); return; }
+    const semQtd = filas.find(f => !(f.qtd > 0)); if (semQtd) { msg.textContent = `Quantidade inválida em "${semQtd.it.descricao}".`; return; }
+    const valRuim = filas.find(f => f.valor && !Number.isFinite(pQtd(f.valor))); if (valRuim) { msg.textContent = `Valor inválido em "${valRuim.it.descricao}".`; return; }
+    const btn = $("#lt-ok"); btn.disabled = true; $("#lt-no").disabled = true;
+    S.ocupado = true; renderSync();
+    try {
+      // a nota vai para o Drive uma vez só e fica ligada a todas as entradas
+      $("#m-forn").value = fornecedor; $("#m-nf").value = numero;
+      let ids = [];
+      if (S.nfArq.length) { ids = await enviarNF(S.nfArq, numero, fornecedor, msg); if (!ids) return; S.nfAnexo = {chave: chaveNF(), ids}; S.nfArq = []; S.nfLida = null; renderNfAnexo(); }
+      else if (nfAnexoValido()) ids = S.nfAnexo.ids;
+      const mapa = mapaNF.ler(); let feitas = 0;
+      for (let k = 0; k < filas.length; k++) {
+        const f = filas[k], st = $(".lote-st", f.el);
+        msg.className = "hint"; msg.innerHTML = `<span class="spin" aria-hidden="true"></span> Registrando ${k+1} de ${filas.length}…`;
+        try {
+          let itemId = f.sel;
+          if (itemId === "__novo") {
+            const nome = nomeDeNota(f.it.descricao);
+            await api("salvarItem", {item:{codigo:"", nome, categoria:"", tipoItem:"Consumível", unidade:String(f.it.unidade||"un").toLowerCase(), local:"", qtd:0, minimo:0, obs:`Cadastrado pela nota ${numero}${fornecedor ? " (" + fornecedor + ")" : ""}`}});
+            const novo = itensArr().filter(i => i.nome === nome).sort((a,b) => String(b.criadoEm).localeCompare(String(a.criadoEm)))[0];
+            if (!novo) throw {message:"O item novo não apareceu na lista. Atualize a página."};
+            itemId = novo.id;
+          }
+          const mov = {tipo:"entrada", itemId, qtd:f.qtd, data, fornecedor, nf:numero, valorUnit: f.valor ? pQtd(f.valor) : "", responsavel:receb, obs:`Na nota: ${f.it.descricao}`};
+          if (ids.length) mov.nfFotos = ids.join(",");
+          await api("registrar", {mov});
+          mapa[chaveProduto(fornecedor, f.it)] = itemId;
+          f.usar.disabled = true; f.el.classList.add("feito"); st.className = "hint lote-st ok"; st.textContent = "Registrado.";
+          feitas++;
+        } catch(e){
+          st.className = "hint lote-st err"; st.textContent = e.message || "Não foi possível registrar.";
+          msg.className = "hint err"; msg.textContent = `${feitas} de ${filas.length} registradas. Corrija o item marcado e clique de novo para registrar o que falta.`;
+          mapaNF.gravar(mapa); contar(); return;
+        }
+      }
+      mapaNF.gravar(mapa);
+      fecharModal();
+      toast(`${feitas} ${feitas===1?"entrada registrada":"entradas registradas"} da nota ${numero}.`);
+      renderNfAnexo();
+    } finally { if ($("#lt-no")) $("#lt-no").disabled = false; S.ocupado = false; renderSync(); if ($("#lt-ok")) contar(); }
+  });
+}
+
 async function abrirNF(m){
   const ids = idsNF(m.nfFotos); if (!ids.length) return;
   $("#modal-box").innerHTML = `

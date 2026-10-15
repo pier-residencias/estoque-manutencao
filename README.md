@@ -47,6 +47,10 @@ Os dados ficam nas abas **Demandas** e **Preventivas** da planilha. As permissõ
 
 Em **Registrar → Entrada**, o campo **Foto da nota fiscal** anexa a foto (ou o PDF) da nota da compra, até 4 arquivos. Os arquivos ficam na pasta "Notas fiscais - Pier Gestão" no Drive, ao lado da planilha, e o link vai na coluna **Foto da NF** da aba Movimentacoes. Para lançar outros itens da mesma nota, o fornecedor e o número continuam preenchidos e a mesma foto vai junto, sem enviar de novo. No **Histórico**, o link **ver nota** abre o arquivo.
 
+### Leitura automática da nota (PDF)
+
+Ao anexar o **PDF da nota** (a DANFE que a loja envia), o site lê fornecedor, número, data e a lista de produtos (descrição, quantidade e valor). O botão **Conferir e registrar** abre a lista: para cada linha o sistema sugere o item do estoque mais parecido (ou cadastrar como item novo), e a pessoa confere antes de gravar todas as entradas de uma vez, com a nota anexada. A escolha feita para cada produto de cada fornecedor fica lembrada naquele aparelho. A leitura usa o pdf.js (cdnjs) e o arquivo `nfe.js`; foto de nota não tem texto para ler.
+
 ## Importar inventário
 
 Em **Itens → Importar inventário**, envie a planilha da contagem (.xlsx ou .csv). O sistema acha as colunas pelo título (Código, Item, Especificação, Categoria, Tipo, Un., Saldo atual ou Quantidade, Estoque mínimo, Localização, Observações), mostra uma prévia e grava a diferença de cada item como ajuste no histórico. Antes de gravar, guarda uma cópia oculta da aba Itens.

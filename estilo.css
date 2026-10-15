@@ -353,3 +353,16 @@ td.mono{white-space:nowrap}
 .nf-item{min-height:60px;display:flex;align-items:center;gap:8px}
 .foto-ver.nf-img{width:100%;height:auto;max-height:70vh;background:var(--surface-2)}
 .foto-ver.nf-img img{width:100%;height:auto;max-height:70vh;object-fit:contain}
+
+/* Itens lidos da nota */
+.lote{display:grid;gap:10px}
+.lote-item{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:10px;background:var(--surface)}
+.lote-item.off{opacity:.55}
+.lote-item.feito{background:var(--ok-bg);border-color:transparent}
+.lote-top{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.lote-top input{margin-top:4px;accent-color:var(--accent)}
+.lote-top .sub{display:block;font-size:.82rem;color:var(--muted)}
+.lote-campos{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(0,.8fr) minmax(0,1fr);gap:10px}
+.lote-st:empty{display:none}
+.lote-st.ok{color:var(--ok);font-weight:600}
+@media (max-width:560px){ .lote-campos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} .lote-campos .field:first-child{grid-column:1/-1} }
