@@ -382,3 +382,12 @@ td.mono{white-space:nowrap}
 .per-cel{font-size:.85rem;white-space:nowrap;font-variant-numeric:tabular-nums}
 .per-ent{color:var(--ok);font-weight:600}
 .per-sai{color:var(--info);font-weight:600}
+
+/* Setor do estoque */
+.setor-bar{background:var(--surface-2);border-bottom:1px solid var(--line)}
+.setor-bar .wrap{display:flex;align-items:center;gap:12px;padding-block:8px;flex-wrap:wrap}
+.setor-lbl{font-size:.75rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.setor-btns{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:3px;gap:3px}
+.setor-btns button{border:0;background:none;padding:6px 16px;border-radius:6px;font-family:var(--f-display);font-weight:600;font-size:1rem;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);cursor:pointer}
+.setor-btns button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.setor-nome{color:var(--accent-ink)}

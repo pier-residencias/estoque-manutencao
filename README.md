@@ -29,6 +29,12 @@ A aba **Dashboard** mostra, para o período escolhido: retiradas, compras, empr�
 
 Os dados do estoque e as senhas não ficam neste repositório, só na planilha.
 
+## Setores do estoque (Manutenção e Limpeza)
+
+Cada item pertence a um setor (coluna **Setor** da aba Itens; em branco = Manutenção). Quem tem acesso aos dois setores vê o seletor **Manutenção | Limpeza** abaixo das abas, e Painel, Registrar, Itens, Histórico, Empréstimos e Dashboard passam a mostrar só o setor escolhido. O acesso a cada setor é uma permissão do perfil (Setor Manutenção / Setor Limpeza, na aba Perfis). A função `autorizar` cria o perfil **Limpeza** e o login `limpeza` (a senha aparece no registro de execução e em Usuários). A importação de inventário vale só para o setor escolhido: "tirar da lista" nunca apaga itens do outro setor. Itens novos da limpeza recebem códigos LIM-001, LIM-002…
+
+Um item está **para repor** quando o estoque chega ao mínimo (igual ou abaixo).
+
 ## Itens: filtro por data
 
 Na aba **Itens**, o campo **Filtrar por data** mostra só os itens cadastrados, com entrada, com saída ou troca, ou com qualquer movimento num **mês** ou num **dia**. A coluna **No período** soma o que entrou e saiu de cada item naquele período.

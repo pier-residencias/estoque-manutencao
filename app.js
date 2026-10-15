@@ -27,13 +27,16 @@ const S = {
   usuario:"", nome:"", senha:"", perfil:"", perms:{}, rel:null, eq:null, dashPreset:"mes", itens:new Map(), emprestimos:[], movs:[],
   tab:"painel", tipo:"saida", picked:null, iStatus:"", hTipo:"", histMes:mesDe(), ocupado:false, ultima:null,
   os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null, nfLida:null,
-  iPer:{tipo:"", modo:"mes", mes:mesDe(), dia:hoje()}, mesesCarregados:[]
+  iPer:{tipo:"", modo:"mes", mes:mesDe(), dia:hoje()}, mesesCarregados:[],
+  setores:["Manutenção"], setor:"Manutenção", empTodos:[]
 };
+const setorDe = x => (x && x.setor) || "Manutenção";
+const doSetor = x => setorDe(x) === S.setor;
 const can = p => !!(S.perms && S.perms[p]);
 const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"]};
 const podeAba = t => (ABAS_PERM[t]||[]).some(can);
 const primeiraAba = () => Object.keys(ABAS_PERM).find(podeAba) || "painel";
-const movsDoMes = ym => S.movs.filter(m => String(m.data).slice(0,7) === ym);
+const movsDoMes = ym => S.movs.filter(m => String(m.data).slice(0,7) === ym && doSetor(m));
 
 // ---------- sessão salva no aparelho ----------
 const guardar = () => { try { localStorage.setItem("estoque-sessao", JSON.stringify({usuario:S.usuario, senha:S.senha})); } catch(e){} };
@@ -64,7 +67,11 @@ async function api(acao, extra){
 }
 function aplicar(d){
   S.itens = new Map((d.itens||[]).map(i => [i.id, i]));
-  S.emprestimos = d.emprestimos || [];
+  S.empTodos = d.emprestimos || [];
+  S.setores = d.setores && d.setores.length ? d.setores : ["Manutenção"];
+  if (!S.setores.includes(S.setor)) { let salvo = ""; try { salvo = localStorage.getItem("estoque-setor") || ""; } catch(e){} S.setor = S.setores.includes(salvo) ? salvo : S.setores[0]; }
+  S.emprestimos = S.empTodos.filter(doSetor);
+  renderSetorSel();
   S.movs = d.movs || [];
   S.os = d.os || [];
   S.colab = d.colaboradores || [];
@@ -129,6 +136,7 @@ function setTab(t){
   S.tab = t;
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===t ? "true":"false"));
   $$("main > section").forEach(s => s.hidden = s.id !== "t-"+t);
+  renderSetorSel();
   renderAll();
   if (t==="dashboard") carregarDashboard();
   if (t==="usuarios") carregarEquipe();
@@ -151,17 +159,38 @@ document.addEventListener("click", e => {
 function statusItem(it){
   const q = Number(it.qtd)||0, m = Number(it.minimo)||0;
   if (q <= 0) return "zero";
-  if (m > 0 && q < m) return "baixo";
+  if (m > 0 && q <= m) return "baixo";   // chegou no mínimo: hora de repor
   return "ok";
 }
 const precisaRepor = i => statusItem(i)!=="ok";
-const stPill = s => s==="zero" ? `<span class="pill s-zero">Zerado</span>` : s==="baixo" ? `<span class="pill s-baixo">Abaixo do mín.</span>` : `<span class="pill s-ok">OK</span>`;
-const itensArr = () => [...S.itens.values()].sort((a,b) => String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR"));
+const stPill = s => s==="zero" ? `<span class="pill s-zero">Zerado</span>` : s==="baixo" ? `<span class="pill s-baixo">Repor</span>` : `<span class="pill s-ok">OK</span>`;
+const itensArr = () => [...S.itens.values()].filter(doSetor).sort((a,b) => String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR"));
 function proxCodigo(){
+  const pre = S.setor === "Limpeza" ? "LIM-" : "MAN-";
   let max = 0;
-  for (const it of S.itens.values()) { const m = /(\d+)\s*$/.exec(it.codigo||""); if (m) max = Math.max(max, +m[1]); }
-  return "MAN-" + String(max+1).padStart(4,"0");
+  for (const it of S.itens.values()) {
+    const c = String(it.codigo||"");
+    if (pre !== "MAN-" && !c.toUpperCase().startsWith(pre)) continue;
+    const m = /(\d+)\s*$/.exec(c); if (m) max = Math.max(max, +m[1]);
+  }
+  return pre + String(max+1).padStart(pre === "MAN-" ? 4 : 3, "0");
 }
+// seletor de setor (Manutenção | Limpeza): aparece para quem vê mais de um
+const ABAS_COM_SETOR = ["painel","registrar","itens","historico","emprestimos","dashboard"];
+function renderSetorSel(){
+  const bar = $("#setor-bar"); if (!bar) return;
+  bar.hidden = S.setores.length < 2 || !ABAS_COM_SETOR.includes(S.tab);
+  $("#setor-btns").innerHTML = S.setores.map(x => `<button type="button" data-setor="${esc(x)}" aria-pressed="${x===S.setor}">${esc(x)}</button>`).join("");
+  $$(".setor-nome").forEach(el => el.textContent = S.setores.length > 1 ? " · " + S.setor : "");
+}
+function mudarSetor(x){
+  if (x === S.setor || !S.setores.includes(x)) return;
+  S.setor = x; try { localStorage.setItem("estoque-setor", x); } catch(e){}
+  S.emprestimos = S.empTodos.filter(doSetor);
+  S.picked = null; S.iStatus = ""; syncChips("#i-status","s",S.iStatus); $("#i-cat").value = "";
+  renderSetorSel(); renderAll(); renderSugestoes();
+}
+document.addEventListener("click", e => { const b = e.target.closest("#setor-btns [data-setor]"); if (b) mudarSetor(b.dataset.setor); });
 const ordMov = (a,b) => String(b.data||"").localeCompare(String(a.data||"")) || String(b.criadoEm||"").localeCompare(String(a.criadoEm||""));
 const sinal = m => (Number(m.delta)>0?"+":Number(m.delta)<0?"−":"");
 
@@ -214,7 +243,7 @@ function renderPainel(){
       <div><div class="t">${esc(i.nome)}</div><div class="d"><span class="mono">${esc(i.codigo||"")}</span>${i.local?" · "+esc(i.local):""}</div></div>
       <div class="r num">${fNum(i.qtd)} / ${fNum(i.minimo)} ${esc(i.unidade||"")}</div></div>`).join("")
     + (baixos.length>8 ? `<div class="empty"><button class="link" data-go2="itens" data-f="baixo">Ver todos os ${baixos.length}</button></div>`:"")
-    : `<div class="empty">${arr.length ? "Nenhum item abaixo do estoque mínimo." : "Quando os itens forem cadastrados com estoque mínimo, os que precisam de reposição aparecem aqui."}</div>`;
+    : `<div class="empty">${arr.length ? "Nenhum item no estoque mínimo ou abaixo dele." : "Quando os itens forem cadastrados com estoque mínimo, os que precisam de reposição aparecem aqui."}</div>`;
 
   const cont = {};
   for (const m of saidas) { const k = String(m.destino||"Sem destino").trim(); cont[k] = (cont[k]||0)+1; }
@@ -346,16 +375,18 @@ async function enviar(btn, msgEl, acao, extra, aoConcluir){
 function abrirItem(id, depois){
   const it = id ? S.itens.get(id) : null;
   const novo = !it, edit = novo ? can("itens_cadastrar") : can("itens_editar");
-  const v = it || {codigo:proxCodigo(), nome:"", categoria:"", tipoItem:"Consumível", unidade:"un", local:"", qtd:"", minimo:"", obs:""};
+  const limpeza = (it ? setorDe(it) : S.setor) === "Limpeza";
+  const v = it || {codigo:proxCodigo(), nome:"", categoria:"", tipoItem:limpeza ? "Produto químico" : "Consumível", unidade:"un", local:"", qtd:"", minimo:"", obs:"", setor:S.setor};
   const ro = edit ? "" : "disabled";
-  const unidades = ["un","pç","par","m","m²","kg","g","L","ml","cx","pct","rolo","galão","lata","jogo"];
+  const unidades = ["un","pç","par","m","m²","kg","g","L","ml","cx","pct","rolo","galão","bombona","fardo","lata","jogo"];
   if (v.unidade && !unidades.includes(v.unidade)) unidades.push(v.unidade);
-  const tipos = ["Consumível","Ferramenta","Peça de reposição","Equipamento","EPI"];
+  const tipos = limpeza ? ["Produto químico","Descartável","Utensílio","EPI","Consumível"] : ["Consumível","Ferramenta","Peça de reposição","Equipamento","EPI"];
   if (v.tipoItem && !tipos.includes(v.tipoItem)) tipos.push(v.tipoItem);
   const numTxt = x => x===""||x==null ? "" : esc(String(x).replace(".",","));
   $("#modal-box").innerHTML = `
     <h3>${novo ? "Novo item" : edit ? "Editar item" : "Detalhes do item"}</h3>
     <form class="form" id="f-item" novalidate autocomplete="off">
+      ${S.setores.length > 1 ? `<div class="field full"><label for="it-setor">Setor</label><select class="input" id="it-setor" ${ro}>${S.setores.map(x => `<option ${x===setorDe(v)?"selected":""}>${esc(x)}</option>`).join("")}</select></div>` : ""}
       <div class="field"><label for="it-cod">Código</label><input class="input mono" id="it-cod" value="${esc(v.codigo)}" ${ro}></div>
       <div class="field"><label for="it-tipo">Tipo</label><select class="input" id="it-tipo" ${ro}>${tipos.map(o=>`<option ${o===v.tipoItem?"selected":""}>${esc(o)}</option>`).join("")}</select></div>
       <div class="field full"><label for="it-nome">Nome do item <span class="req">*</span></label><input class="input" id="it-nome" value="${esc(v.nome)}" placeholder="Ex.: Lâmpada LED tubular 18W" ${ro}></div>
@@ -401,7 +432,7 @@ function abrirItem(id, depois){
     if (dup) { msg.textContent = `O código ${codigo} já é usado por "${dup.nome}".`; return; }
     let motivo = "";
     if (!novo && qtd !== (Number(it.qtd)||0)) { motivo = $("#it-motivo").value.trim(); if (!motivo) { msg.textContent = "Explique o motivo da mudança no estoque."; return; } }
-    const item = { id: it ? it.id : "", codigo, nome, categoria:$("#it-cat").value.trim(), tipoItem:$("#it-tipo").value, unidade:$("#it-un").value, local:$("#it-local").value.trim(), qtd, minimo, obs:$("#it-obs").value.trim() };
+    const item = { id: it ? it.id : "", codigo, nome, categoria:$("#it-cat").value.trim(), tipoItem:$("#it-tipo").value, unidade:$("#it-un").value, local:$("#it-local").value.trim(), qtd, minimo, obs:$("#it-obs").value.trim(), setor: $("#it-setor") ? $("#it-setor").value : setorDe(v) };
     const antes = new Set(S.itens.keys());
     await enviar($("#it-salvar"), msg, "salvarItem", {item, motivo}, () => {
       fecharModal();
@@ -712,7 +743,8 @@ $$("#d-presets .chip").forEach(c => c.addEventListener("click", () => {
 ["#d-de","#d-ate"].forEach(s => $(s).addEventListener("change", () => { if (S.dashPreset === "pers") carregarDashboard(); }));
 
 function renderDash(){
-  const R = S.rel;
+  const R0 = S.rel;
+  const R = R0 && Object.assign({}, R0, {itens: R0.itens.filter(doSetor), movs: R0.movs.filter(doSetor), emprestimos: R0.emprestimos.filter(doSetor)});
   if (!R) { $("#d-resumo").textContent = "Carregando os dados do período…"; return; }
   const diasPer = Math.round((new Date(R.ate) - new Date(R.de)) / 864e5) + 1;
   $("#d-resumo").textContent = `De ${fData(R.de)} a ${fData(R.ate)} · ${diasPer} dia${diasPer===1?"":"s"}`;
@@ -735,7 +767,7 @@ function renderDash(){
     kpi("Retiradas", ret.length, `${fNum(uRet)} unidade${uRet===1?"":"s"} · saídas e trocas`),
     kpi("Compras", fBRL(gasto), `${ent.length} entrada${ent.length===1?"":"s"} registrada${ent.length===1?"":"s"}`),
     kpi("Empréstimos", emp.length, `${R.emprestimos.length} em aberto agora${atras.length?` · ${atras.length} atrasado${atras.length===1?"":"s"}`:""}`, atras.length?"warn":""),
-    kpi("Abaixo do mínimo", baixos.length, `${baixos.filter(i=>statusItem(i)==="zero").length} zerados hoje`, baixos.length?"crit":""),
+    kpi("Para repor", baixos.length, `${baixos.filter(i=>statusItem(i)==="zero").length} zerados hoje`, baixos.length?"crit":""),
     kpi("Valor estimado do estoque", fBRL(valorEst), `${comPreco} de ${itens.length} itens com preço de compra`),
     kpi("Itens parados", parados.length, "com estoque e sem movimento no período")
   ].join("");
@@ -743,6 +775,8 @@ function renderDash(){
   graficoMeses(ret, ent, R.de, R.ate);
   renderDashOS(R);
   renderDashDem(R);
+  // OS e demandas são da manutenção do prédio; no setor Limpeza o dashboard mostra só o estoque
+  if (S.setor !== "Manutenção") { $("#d-os-bloco").hidden = true; $("#d-dem-bloco").hidden = true; }
 
   const somar = (lista, chave, valor) => { const o = {}; lista.forEach(m => { const k = String(chave(m)||"").trim() || "Não informado"; o[k] = o[k] || {v:0, n:0, u:0}; o[k].v += valor(m); o[k].n++; o[k].u += Number(m.qtd||0); }); return o; };
   const un = i => (porId.get(i)||{}).unidade || "";
@@ -769,7 +803,7 @@ function renderDash(){
     : `<tr><td colspan="4"><div class="empty">Nenhuma ferramenta fora do almoxarifado agora.</div></td></tr>`;
   // estoque crítico
   $("#d-crit").innerHTML = baixos.length ? baixos.sort((a,b) => (Number(a.qtd)-Number(a.minimo)) - (Number(b.qtd)-Number(b.minimo))).map(i => `<tr><td><b>${esc(i.nome)}</b><span class="sub mono">${esc(i.codigo||"")}</span></td><td class="n">${fNum(i.qtd)} / ${fNum(i.minimo)} ${esc(i.unidade||"")}</td><td>${stPill(statusItem(i))}</td></tr>`).join("")
-    : `<tr><td colspan="3"><div class="empty">Nenhum item abaixo do mínimo. Defina o estoque mínimo dos itens para receber esse alerta.</div></td></tr>`;
+    : `<tr><td colspan="3"><div class="empty">Nenhum item no mínimo ou abaixo dele. Defina o estoque mínimo dos itens para receber esse alerta.</div></td></tr>`;
   // parados
   const par = parados.sort((a,b) => String(R.ultimo[a.id]||"").localeCompare(String(R.ultimo[b.id]||"")) || Number(b.qtd)-Number(a.qtd)).slice(0, 15);
   $("#d-parados").innerHTML = par.length ? par.map(i => `<tr><td><b>${esc(i.nome)}</b><span class="sub mono">${esc(i.codigo||"")}</span></td><td class="n">${fNum(i.qtd)} ${esc(i.unidade||"")}</td><td>${R.ultimo[i.id] ? fData(R.ultimo[i.id]) : '<span class="muted">nunca</span>'}</td></tr>`).join("")
@@ -1181,7 +1215,7 @@ function acaoOS(o, op){
   if (op === "iniciar") { enviar(null, $("#os-msg"), "osAtualizar", {id:o.id, op}, depois); return; }
   if (op === "whats") { abrirWhats(o.responsavelUsuario, msgWhats("os", o)); return; }
   if (op === "material") {
-    fecharModal(); setTab("registrar");
+    fecharModal(); if (S.setores.includes("Manutenção")) mudarSetor("Manutenção"); setTab("registrar");
     const t = can("registrar_saida") ? "saida" : "troca"; setTipo(t);
     renderOsRef(o.numero); $("#m-osref").value = o.numero;
     if (!$("#m-destino").value) $("#m-destino").value = o.local || "";
@@ -1810,7 +1844,7 @@ function abrirLote(){
           if (itemId === "__novo") {
             const nome = nomeDeNota(f.it.descricao);
             const base = dadosDeItemNovo(f.it.descricao);
-            await api("salvarItem", {item:Object.assign(base, {codigo:"", nome, unidade:String(f.it.unidade||"un").toLowerCase(), qtd:0, minimo:0, obs:`Cadastrado pela nota ${numero}${fornecedor ? " (" + fornecedor + ")" : ""}${f.it.codigo ? " · cód. do fornecedor " + f.it.codigo : ""}`})});
+            await api("salvarItem", {item:Object.assign(base, {codigo:"", setor:S.setor, nome, unidade:String(f.it.unidade||"un").toLowerCase(), qtd:0, minimo:0, obs:`Cadastrado pela nota ${numero}${fornecedor ? " (" + fornecedor + ")" : ""}${f.it.codigo ? " · cód. do fornecedor " + f.it.codigo : ""}`})});
             const novo = itensArr().filter(i => i.nome === nome).sort((a,b) => String(b.criadoEm).localeCompare(String(a.criadoEm)))[0];
             if (!novo) throw {message:"O item novo não apareceu na lista. Atualize a página."};
             itemId = novo.id;
@@ -1909,10 +1943,19 @@ function carregarXLSX(){
   return xlsxPronto;
 }
 const cab = s => norm(String(s ?? "")).replace(/[^a-z0-9]+/g, " ").trim();
+// sugestão de categoria para os materiais de limpeza (dá para mudar depois em cada item)
+function categoriaLimpeza(nome){
+  const n = norm(nome);
+  if (/luva|capa de chuva|bota|mascara|avental|oculos/.test(n)) return {categoria:"EPI", tipo:"EPI"};
+  if (/saco de lixo|papel|copo|fitilho|guardanapo|toalha/.test(n)) return {categoria:"Descartáveis", tipo:"Descartável"};
+  if (/dispenser|reservatorio|borrifador|balde|frasco/.test(n)) return {categoria:"Utensílios", tipo:"Utensílio"};
+  if (/alcool|desinfet|detergente|essencia|floter|higidog|hipoclorito|inseticida|limp|lustra|oleo|pasta|peroxy|sabonete|bom ar|cloro|amaciante|cera|multiuso liquido/.test(n)) return {categoria:"Produtos químicos", tipo:"Produto químico"};
+  return {categoria:"Utensílios", tipo:"Utensílio"};
+}
 function mapaColunas(row){
   const h = row.map(cab), achar = t => h.findIndex(t);
   const m = {
-    codigo: achar(x => x.startsWith("codigo")),
+    codigo: achar(x => x.startsWith("codigo") || x === "cod" || x === "cod item"),
     nome: achar(x => ["item","nome","nome do item","descricao","material","produto"].includes(x)),
     espec: achar(x => x.startsWith("especifica")),
     categoria: achar(x => x === "categoria"),
@@ -1942,15 +1985,18 @@ function lerPlanilha(wb){
         const espec = m.espec >= 0 ? String(r[m.espec] ?? "").trim() : "";
         let un = m.unidade >= 0 ? String(r[m.unidade] ?? "").trim().toLowerCase() : "";
         if (!un || /^\d+([.,]\d+)?$/.test(un)) un = "un";
+        un = ({"unid.":"un","unid":"un","und":"un","unidade":"un","litro":"L","litros":"L","l":"L","caixa":"cx","pacote":"pct","pacotes":"pct","galao":"galão","peça":"pç","peca":"pç"})[un] || un;
+        let cod = m.codigo >= 0 ? String(r[m.codigo] ?? "").trim() : "";
+        if (S.setor === "Limpeza" && /^\d{1,4}$/.test(cod)) cod = "LIM-" + cod.padStart(3, "0");
         const q = r[m.qtd] === "" ? 0 : num(r[m.qtd]);
         const mn = m.minimo >= 0 && r[m.minimo] !== "" ? num(r[m.minimo]) : "";
         const conf = m.conferir >= 0 && /^s/i.test(String(r[m.conferir]).trim());
         const obs = [m.obs >= 0 ? String(r[m.obs] ?? "").trim() : "", conf ? "Conferir com a contagem física." : ""].filter(Boolean).join(" ");
         itens.push({
-          codigo: m.codigo >= 0 ? String(r[m.codigo] ?? "").trim() : "",
+          codigo: cod,
           nome: espec ? `${base} – ${espec}` : base,
-          categoria: m.categoria >= 0 ? String(r[m.categoria] ?? "").trim() : "",
-          tipoItem: m.tipo >= 0 ? String(r[m.tipo] ?? "").trim() : "",
+          categoria: m.categoria >= 0 ? String(r[m.categoria] ?? "").trim() : (S.setor === "Limpeza" ? categoriaLimpeza(base).categoria : ""),
+          tipoItem: m.tipo >= 0 ? String(r[m.tipo] ?? "").trim() : (S.setor === "Limpeza" ? categoriaLimpeza(base).tipo : ""),
           unidade: un, qtd: q, minimo: Number.isFinite(mn) ? mn : "", 
           local: m.local >= 0 ? String(r[m.local] ?? "").trim() : "", obs
         });
@@ -1965,7 +2011,7 @@ function abrirImportacao(){
   if (!can("itens_editar")) return;
   const hojeBR = fData(hoje());
   $("#modal-box").innerHTML = `
-    <h3>Importar inventário</h3>
+    <h3>Importar inventário${S.setores.length > 1 ? " · " + esc(S.setor) : ""}</h3>
     <p class="muted">Envie a planilha da contagem (.xlsx ou .csv). O sistema procura as colunas de código, item, quantidade (de preferência "Saldo atual"), categoria, unidade, mínimo e local.</p>
     <form class="form" id="f-imp" novalidate>
       <div class="field full"><label for="imp-arq">Planilha</label><input class="input" type="file" id="imp-arq" accept=".xlsx,.xls,.csv"></div>
@@ -2023,7 +2069,7 @@ function abrirImportacao(){
   $("#f-imp").addEventListener("submit", async ev => {
     ev.preventDefault(); if (!lido) return;
     const modo = ($("input[name=imp-modo]:checked") || {}).value || "atualizar";
-    await enviar($("#imp-ok"), $("#imp-msg"), "importarContagem", {linhas: lido.itens, modo, motivo: $("#imp-mot").value.trim()}, () => { fecharModal(); setTab("itens"); });
+    await enviar($("#imp-ok"), $("#imp-msg"), "importarContagem", {linhas: lido.itens, modo, motivo: $("#imp-mot").value.trim(), setor: S.setor}, () => { fecharModal(); setTab("itens"); });
   });
 }
 $("#i-importar").addEventListener("click", abrirImportacao);

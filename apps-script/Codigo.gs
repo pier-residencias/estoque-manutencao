@@ -22,9 +22,11 @@ const ABAS = {
     cols: [
       ['id', 'ID'], ['codigo', 'Código'], ['nome', 'Item'], ['categoria', 'Categoria'],
       ['tipoItem', 'Tipo'], ['unidade', 'Unidade'], ['local', 'Local'], ['qtd', 'Estoque'],
-      ['minimo', 'Mínimo'], ['obs', 'Observação'], ['criadoEm', 'Criado em'], ['atualizadoEm', 'Atualizado em']
+      ['minimo', 'Mínimo'], ['obs', 'Observação'], ['criadoEm', 'Criado em'], ['atualizadoEm', 'Atualizado em'],
+      ['setor', 'Setor']
     ],
-    num: ['qtd', 'minimo']
+    num: ['qtd', 'minimo'],
+    opcionais: ['setor']
   },
   movs: {
     nome: 'Movimentacoes',
@@ -95,6 +97,19 @@ const ABAS = {
   }
 };
 
+// setores do estoque: cada item pertence a um; o perfil define quais cada pessoa vê
+const SETORES = [['Manutenção', 'setor_manutencao', 'MAN-'], ['Limpeza', 'setor_limpeza', 'LIM-']];
+function setorDe(it) { const s = texto(it && it.setor); return SETORES.some(x => x[0] === s) ? s : 'Manutenção'; }
+function setoresDe(conta) {
+  const p = (conta && conta.perms) || {};
+  const l = SETORES.filter(x => p[x[1]]).map(x => x[0]);
+  return l.length ? l : ['Manutenção'];
+}
+function exigirSetor(conta, setor) {
+  if (conta && setoresDe(conta).indexOf(setor) < 0) throw falha('Seu perfil não tem acesso aos itens do setor ' + setor + '.');
+}
+function prefixoSetor(setor) { const x = SETORES.find(s => s[0] === setor); return x ? x[2] : 'MAN-'; }
+
 const DEM_STATUS = { pendente: 'Pendente', andamento: 'Em andamento', concluida: 'Concluída', cancelada: 'Cancelada' };
 const PREV_UNIDADES = ['dias', 'semanas', 'meses'];
 
@@ -129,7 +144,7 @@ function doPost(e) {
     if (req.acao === 'entrar' || req.acao === 'dados') gerarPreventivasSePreciso();
     if (req.acao === 'entrar') return json(base);
     if (req.acao === 'dados') return json(Object.assign(base, { dados: dados(req.meses, conta) }));
-    if (req.acao === 'relatorio') { pode('dashboard'); return json(Object.assign(base, { relatorio: relatorio(req.de, req.ate) })); }
+    if (req.acao === 'relatorio') { pode('dashboard'); return json(Object.assign(base, { relatorio: relatorio(req.de, req.ate, conta) })); }
     if (req.acao === 'usuarios') { pode('usuarios'); return json(Object.assign(base, { equipe: equipe() })); }
     if (req.acao === 'nfVer') { algum(['historico_ver', 'registrar_entrada', 'dashboard']); return json(Object.assign(base, { foto: verArquivo(req.fotoId, pastaNF()) })); }
     if (req.acao === 'nfEnviar') { pode('registrar_entrada'); return json(Object.assign(base, { arquivo: nfEnviar(req, conta) })); }
@@ -140,7 +155,7 @@ function doPost(e) {
     let msg, extra = {};
     try {
       switch (req.acao) {
-        case 'registrar': pode('registrar_' + String((req.mov || {}).tipo)); msg = registrar(req.mov || {}, nome); break;
+        case 'registrar': pode('registrar_' + String((req.mov || {}).tipo)); msg = registrar(req.mov || {}, nome, conta); break;
         case 'osAbrir': pode('os_abrir'); msg = osAbrir(req.os || {}, conta); extra.osNumero = msg.numero; extra.osId = msg.id; msg = msg.texto; break;
         case 'osAtualizar': msg = osAtualizar(req, conta); break;
         case 'osFoto': msg = osFoto(req, conta); break;
@@ -150,10 +165,10 @@ function doPost(e) {
         case 'salvarPreventiva': pode('dem_delegar'); msg = salvarPreventiva(req.prev || {}, conta); break;
         case 'excluirPreventiva': pode('dem_delegar'); msg = excluirPreventiva(req.id); break;
         case 'importarContagem': pode('itens_editar'); msg = importarContagem(req, conta); break;
-        case 'devolver': pode('devolver'); msg = devolver(req, nome); break;
-        case 'salvarItem': pode((req.item || {}).id ? 'itens_editar' : 'itens_cadastrar'); msg = salvarItem(req, nome); break;
-        case 'excluirItem': pode('itens_editar'); msg = excluirItem(req.id); break;
-        case 'estornar': pode('historico_estornar'); msg = estornar(req, nome); break;
+        case 'devolver': pode('devolver'); msg = devolver(req, nome, conta); break;
+        case 'salvarItem': pode((req.item || {}).id ? 'itens_editar' : 'itens_cadastrar'); msg = salvarItem(req, nome, conta); break;
+        case 'excluirItem': pode('itens_editar'); msg = excluirItem(req.id, conta); break;
+        case 'estornar': pode('historico_estornar'); msg = estornar(req, nome, conta); break;
         case 'salvarUsuario': pode('usuarios'); msg = salvarUsuario(req, conta); extra.equipe = equipe(); break;
         case 'salvarPerfil': pode('usuarios'); msg = salvarPerfil(req); extra.equipe = equipe(); break;
         case 'excluirPerfil': pode('usuarios'); msg = excluirPerfil(req.nome); extra.equipe = equipe(); break;
@@ -172,7 +187,7 @@ function doPost(e) {
 
 // ---------- ações ----------
 
-function registrar(m, nome) {
+function registrar(m, nome, conta) {
   const tipo = m.tipo;
   if (['entrada', 'saida', 'troca', 'emprestimo'].indexOf(tipo) < 0) throw falha('Tipo de movimentação inválido.');
   const qtd = numero(m.qtd);
@@ -201,6 +216,7 @@ function registrar(m, nome) {
   const ti = tabela('itens');
   const it = linhas(ti).find(x => x.id === m.itemId);
   if (!it) throw falha('Item não encontrado. Atualize a página.');
+  exigirSetor(conta, setorDe(it));
   const atual = Number(it.qtd) || 0;
   const delta = tipo === 'entrada' ? qtd : -qtd;
   if (atual + delta < 0) throw falha('Estoque insuficiente: há ' + fmt(atual) + ' ' + it.unidade + ' de ' + it.nome + '.');
@@ -230,10 +246,12 @@ function registrar(m, nome) {
   return TIPOS[tipo] + (tipo === 'emprestimo' ? ' registrado: ' : ' registrada: ') + fmt(qtd) + ' ' + it.unidade + ' de ' + it.nome + (osNum ? ' · ' + osNum : '') + (nfLinks ? ' · nota fiscal anexada' : '') + '.';
 }
 
-function devolver(r, nome) {
+function devolver(r, nome, conta) {
   const te = tabela('emp');
   const e = linhas(te).find(x => x.id === r.emprestimoId);
   if (!e) throw falha('Este empréstimo já foi encerrado. Atualize a página.');
+  const itE = linhas(tabela('itens')).find(x => x.id === e.itemId);
+  if (itE) exigirSetor(conta, setorDe(itE));
   const estado = texto(r.estado, 40) || 'Em bom estado';
   const perdida = estado.indexOf('Não voltou') === 0;
   const qtd = Number(e.qtd) || 0;
@@ -250,14 +268,18 @@ function devolver(r, nome) {
   return perdida ? 'Perda registrada.' : 'Devolução registrada.';
 }
 
-function salvarItem(r, nome) {
+function salvarItem(r, nome, conta) {
   const v = r.item || {};
   const ti = tabela('itens');
   const todos = linhas(ti);
   const nomeItem = texto(v.nome, 120);
   if (!nomeItem) throw falha('Informe o nome do item.');
+  const anterior = v.id ? todos.find(x => x.id === v.id) : null;
+  if (anterior) exigirSetor(conta, setorDe(anterior));
+  const setor = texto(v.setor) ? setorDe({ setor: v.setor }) : (anterior ? setorDe(anterior) : setoresDe(conta)[0]);
+  exigirSetor(conta, setor);
   let codigo = texto(v.codigo, 30);
-  if (!codigo) codigo = proxCodigo(todos);
+  if (!codigo) codigo = proxCodigo(todos, prefixoSetor(setor));
   const dup = todos.find(x => x.codigo === codigo && x.id !== v.id);
   if (dup) throw falha('O código ' + codigo + ' já é usado por "' + dup.nome + '".');
   const qtd = numero(v.qtd || 0), minimo = numero(v.minimo || 0);
@@ -265,7 +287,8 @@ function salvarItem(r, nome) {
   if (!(minimo >= 0)) throw falha('Estoque mínimo inválido.');
   const base = {
     codigo, nome: nomeItem, categoria: texto(v.categoria, 60), tipoItem: texto(v.tipoItem, 40),
-    unidade: texto(v.unidade, 15) || 'un', local: texto(v.local, 60), minimo, obs: texto(v.obs, 300), atualizadoEm: agora()
+    unidade: texto(v.unidade, 15) || 'un', local: texto(v.local, 60), minimo, obs: texto(v.obs, 300), atualizadoEm: agora(),
+    setor
   };
 
   if (!v.id) {
@@ -297,15 +320,16 @@ function salvarItem(r, nome) {
   return 'Alterações salvas.';
 }
 
-function excluirItem(id) {
+function excluirItem(id, conta) {
   const ti = tabela('itens');
   const it = linhas(ti).find(x => x.id === id);
   if (!it) throw falha('Item não encontrado.');
+  exigirSetor(conta, setorDe(it));
   ti.sh.deleteRow(it._row);
   return 'Item excluído. O histórico continua guardado.';
 }
 
-function estornar(r, nome) {
+function estornar(r, nome, conta) {
   const motivo = texto(r.motivo, 160);
   if (!motivo) throw falha('Informe o motivo do estorno.');
   const tm = tabela('movs');
@@ -316,6 +340,7 @@ function estornar(r, nome) {
   const inv = -(Number(m.delta) || 0);
   const ti = tabela('itens');
   const it = linhas(ti).find(x => x.id === m.itemId);
+  if (it) exigirSetor(conta, setorDe(it));
   if (inv !== 0 && it) {
     const novo = arred((Number(it.qtd) || 0) + inv);
     if (novo < 0) throw falha('Não dá para estornar: o estoque ficaria negativo (' + fmt(novo) + ').');
@@ -341,10 +366,12 @@ function dados(meses, conta) {
   const ms = (Array.isArray(meses) ? meses : []).filter(x => /^\d{4}-\d{2}$/.test(String(x)));
   const limpa = o => { const c = Object.assign({}, o); delete c._row; return c; };
   const todas = linhas(tabela('movs'));
+  const V = visaoSetores(conta);
   const out = {
-    itens: linhas(tabela('itens')).map(limpa),
-    emprestimos: linhas(tabela('emp')).map(limpa),
-    movs: todas.filter(m => ms.indexOf(String(m.data).slice(0, 7)) >= 0).map(limpa)
+    itens: V.itens.map(limpa),
+    emprestimos: linhas(tabela('emp')).filter(V.ve).map(e => V.marca(limpa(e))),
+    movs: todas.filter(m => ms.indexOf(String(m.data).slice(0, 7)) >= 0 && V.ve(m)).map(m => V.marca(limpa(m))),
+    setores: V.setores
   };
   const p = (conta && conta.perms) || {};
   if (p.os_ver || p.os_abrir || p.os_atender || p.os_gerenciar) {
@@ -373,6 +400,21 @@ function dados(meses, conta) {
       fone ? { usuario: u.usuario, nome: u.nome || u.usuario, telefone: u.telefone } : { usuario: u.usuario, nome: u.nome || u.usuario });
   }
   return out;
+}
+
+// itens dos setores que a pessoa vê, e funções para filtrar e marcar movimentações e empréstimos
+function visaoSetores(conta) {
+  const setores = setoresDe(conta);
+  const todos = linhas(tabela('itens'));
+  const por = {};
+  todos.forEach(i => { por[i.id] = setorDe(i); });
+  const setorMov = x => por[x.itemId] || 'Manutenção';
+  return {
+    setores,
+    itens: todos.filter(i => setores.indexOf(por[i.id]) >= 0).map(i => Object.assign(i, { setor: por[i.id] })),
+    ve: x => setores.indexOf(setorMov(x)) >= 0,
+    marca: x => Object.assign(x, { setor: setorMov(x) })
+  };
 }
 
 // junta a cada OS os materiais retirados com o número dela
@@ -469,6 +511,8 @@ const PERMISSOES = [
   ['itens_ver', 'Ver itens', 'Ver a lista de itens e o estoque', 'Consulta'],
   ['historico_ver', 'Ver histórico', 'Ver o histórico de movimentações', 'Consulta'],
   ['dashboard', 'Ver dashboard', 'Ver o dashboard da administração', 'Consulta'],
+  ['setor_manutencao', 'Setor Manutenção', 'Ver e movimentar os itens da manutenção', 'Setores do estoque'],
+  ['setor_limpeza', 'Setor Limpeza', 'Ver e movimentar os materiais de limpeza', 'Setores do estoque'],
   ['registrar_saida', 'Saída', 'Registrar saídas', 'Movimentações'],
   ['registrar_entrada', 'Entrada', 'Registrar entradas e compras', 'Movimentações'],
   ['registrar_troca', 'Troca', 'Registrar trocas de peças', 'Movimentações'],
@@ -488,7 +532,9 @@ const PERMISSOES = [
   ['usuarios', 'Usuários', 'Gerenciar usuários e permissões', 'Controle']
 ];
 const PADRAO_MANUTENCAO = ['painel', 'itens_ver', 'historico_ver', 'registrar_saida', 'registrar_entrada',
-  'registrar_troca', 'registrar_emprestimo', 'devolver', 'itens_cadastrar', 'os_ver', 'os_abrir', 'os_atender', 'dem_ver', 'dem_executar'];
+  'registrar_troca', 'registrar_emprestimo', 'devolver', 'itens_cadastrar', 'os_ver', 'os_abrir', 'os_atender', 'dem_ver', 'dem_executar',
+  'setor_manutencao'];
+const PADRAO_LIMPEZA = ['painel', 'itens_ver', 'historico_ver', 'registrar_saida', 'registrar_entrada', 'itens_cadastrar', 'setor_limpeza'];
 
 function autenticar(usuario, senha) {
   const u = String(usuario || '').trim().toLowerCase();
@@ -802,12 +848,14 @@ function senhaAleatoria() {
 
 // ---------- relatório para o dashboard ----------
 
-function relatorio(de, ate) {
+function relatorio(de, ate, conta) {
   const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
   if (!ok(de) || !ok(ate)) throw falha('Período inválido.');
   if (de > ate) { const t = de; de = ate; ate = t; }
   const limpa = o => { const c = Object.assign({}, o); delete c._row; return c; };
-  const todas = linhas(tabela('movs'));
+  const V = visaoSetores(conta);
+  const todasSetores = linhas(tabela('movs'));
+  const todas = todasSetores.filter(V.ve).map(V.marca);
   const ultimo = {}, preco = {};
   todas.forEach(m => {
     if (m.estornado || m.tipo === 'estorno') return;
@@ -827,11 +875,12 @@ function relatorio(de, ate) {
   }).map(limpa);
   return {
     de, ate,
-    os: comMateriais(osDoPeriodo, todas),
+    os: comMateriais(osDoPeriodo, todasSetores),
     demandas: demDoPeriodo,
     movs: todas.filter(m => m.data >= de && m.data <= ate).map(limpa),
-    itens: linhas(tabela('itens')).map(limpa),
-    emprestimos: linhas(tabela('emp')).map(limpa),
+    itens: V.itens.map(limpa),
+    emprestimos: linhas(tabela('emp')).filter(V.ve).map(e => V.marca(limpa(e))),
+    setores: V.setores,
     ultimo, preco
   };
 }
@@ -1337,6 +1386,9 @@ function importarContagem(r, conta) {
   if (entrada.length > 5000) throw falha('A planilha tem itens demais (máximo 5.000).');
   const substituir = r.modo === 'substituir';
   const motivo = texto(r.motivo, 120) || 'Contagem de inventário';
+  const setor = texto(r.setor) ? setorDe({ setor: r.setor }) : setoresDe(conta)[0];
+  exigirSetor(conta, setor);
+  const prefixo = prefixoSetor(setor);
   const ti = tabela('itens');
   const ss = SpreadsheetApp.getActive();
   if (!conta.perms.itens_cadastrar && entrada.some(l => !l.codigo)) throw falha('Seu perfil não pode cadastrar itens novos.');
@@ -1352,8 +1404,19 @@ function importarContagem(r, conta) {
   const I = ti.idx;
   const porCodigo = {};
   vals.forEach((row, i) => { const c = String(row[I.codigo]).trim().toUpperCase(); if (c && String(row[I.id])) porCodigo[c] = i; });
+  const setorDaLinha = row => setorDe({ setor: row[I.setor] });
   let maxNum = 0;
-  vals.forEach(row => { const x = /(\d+)\s*$/.exec(String(row[I.codigo])); if (x) maxNum = Math.max(maxNum, Number(x[1])); });
+  vals.forEach(row => {
+    const c = String(row[I.codigo]);
+    if (prefixo !== 'MAN-' && c.toUpperCase().indexOf(prefixo) !== 0) return;
+    const x = /(\d+)\s*$/.exec(c); if (x) maxNum = Math.max(maxNum, Number(x[1]));
+  });
+  // os códigos que já vêm na planilha também contam, para o automático não repetir nenhum
+  entrada.forEach(l => {
+    const c = texto(l.codigo, 30);
+    if (!c || (prefixo !== 'MAN-' && c.toUpperCase().indexOf(prefixo) !== 0)) return;
+    const x = /(\d+)\s*$/.exec(c); if (x) maxNum = Math.max(maxNum, Number(x[1]));
+  });
 
   const usados = {}, novos = [], movs = [], mantidas = {};
   let atualizados = 0, criados = 0, iguais = 0;
@@ -1379,6 +1442,9 @@ function importarContagem(r, conta) {
     };
     const minimo = l.minimo === '' || l.minimo == null ? null : numero(l.minimo);
     const i = chave ? porCodigo[chave] : undefined;
+    if (i !== undefined && setorDaLinha(vals[i]) !== setor) {
+      throw falha('O código ' + codigo + ' já é usado por "' + vals[i][I.nome] + '" no setor ' + setorDaLinha(vals[i]) + '. Mude o código na planilha.');
+    }
     if (i !== undefined) {
       const row = vals[i];
       mantidas[i] = true;
@@ -1392,14 +1458,14 @@ function importarContagem(r, conta) {
           qtd - antes, motivo + ' (de ' + fmt(antes) + ' para ' + fmt(qtd) + ')');
       } else iguais++;
     } else {
-      if (!codigo) { maxNum++; codigo = 'MAN-' + ('000' + maxNum).slice(-4); }
+      if (!codigo) { maxNum++; codigo = prefixo + ('000' + maxNum).slice(prefixo === 'MAN-' ? -4 : -3); }
       const row = new Array(ti.ncol).fill('');
       const id = novoId('I');
       row[I.id] = id; row[I.codigo] = codigo;
       Object.keys(campos).forEach(c => { row[I[c]] = campos[c]; });
       if (!row[I.unidade]) row[I.unidade] = 'un';
       row[I.qtd] = qtd; row[I.minimo] = minimo !== null && minimo >= 0 ? minimo : 0;
-      row[I.criadoEm] = ag; row[I.atualizadoEm] = ag;
+      row[I.criadoEm] = ag; row[I.atualizadoEm] = ag; row[I.setor] = setor;
       novos.push(row); criados++;
       if (qtd > 0) mov({ id, codigo, nome, unidade: row[I.unidade] }, qtd, motivo + ' (item novo)');
     }
@@ -1410,7 +1476,8 @@ function importarContagem(r, conta) {
   if (substituir) {
     final = [];
     vals.forEach((row, i) => {
-      if (mantidas[i] || !String(row[I.id])) { if (String(row[I.id])) final.push(row); return; }
+      // só sai do cadastro o que é do mesmo setor da planilha importada
+      if (mantidas[i] || !String(row[I.id]) || setorDaLinha(row) !== setor) { if (String(row[I.id])) final.push(row); return; }
       removidos++;
       const q = Number(row[I.qtd]) || 0;
       if (q) mov({ id: String(row[I.id]), codigo: String(row[I.codigo]), nome: String(row[I.nome]), unidade: String(row[I.unidade]) },
@@ -1451,10 +1518,28 @@ function importarContagem(r, conta) {
   if (criados) partes.push(criados + ' novos');
   if (iguais) partes.push(iguais + ' sem mudança');
   if (removidos) partes.push(removidos + ' saíram do cadastro');
-  return 'Inventário importado: ' + partes.join(', ') + '. Cópia da lista anterior guardada na aba oculta "' + nomeCopia + '".';
+  return 'Inventário de ' + setor + ' importado: ' + partes.join(', ') + '. Cópia da lista anterior guardada na aba oculta "' + nomeCopia + '".';
 }
 
 // Rode esta função uma vez pelo editor (Executar) para autorizar o acesso ao Drive das fotos.
+// Perfil "Limpeza" e um login único para a equipe de limpeza (criados uma vez só)
+function garantirLimpeza() {
+  const perfis = lerPerfis();
+  let msg = '';
+  if (!perfis['Limpeza']) {
+    const perms = {}; PADRAO_LIMPEZA.forEach(k => { perms[k] = true; });
+    salvarPerfil({ nome: 'Limpeza', perms });
+    msg += ' Perfil Limpeza criado.';
+  }
+  const U = lerUsuarios();
+  if (!U.lista.some(u => u.perfil === 'Limpeza') && !U.lista.some(u => u.usuario === 'limpeza')) {
+    const senha = senhaAleatoria();
+    salvarUsuario({ u: { usuario: 'limpeza', nome: 'Equipe de Limpeza', senha, perfil: 'Limpeza', ativo: true } }, { usuario: '' });
+    msg += ' Login da limpeza: usuário "limpeza", senha ' + senha + '.';
+  }
+  return msg;
+}
+
 function autorizar() {
   pastaFotos();
   pastaNF();
@@ -1463,7 +1548,9 @@ function autorizar() {
   tabela('dem');
   tabela('prev');
   abaPerfis();
-  Logger.log('Pronto: pastas de fotos e de notas fiscais, abas OS, Demandas e Preventivas e permissões verificadas.');
+  tabela('itens');
+  const limpeza = garantirLimpeza();
+  Logger.log('Pronto: pastas de fotos e de notas fiscais, abas OS, Demandas e Preventivas, setores e permissões verificadas.' + limpeza);
 }
 
 function celula(v, isNum) {
@@ -1490,10 +1577,15 @@ function agora() { return Utilities.formatDate(new Date(), Session.getScriptTime
 function dataValida(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? String(s) : hoje(); }
 function novoId(p) { return p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
-function proxCodigo(todos) {
+function proxCodigo(todos, prefixo) {
+  prefixo = prefixo || 'MAN-';
   let max = 0;
-  todos.forEach(it => { const m = /(\d+)\s*$/.exec(it.codigo || ''); if (m) max = Math.max(max, Number(m[1])); });
-  return 'MAN-' + ('000' + (max + 1)).slice(-4);
+  todos.forEach(it => {
+    const c = String(it.codigo || '');
+    if (prefixo !== 'MAN-' && c.toUpperCase().indexOf(prefixo) !== 0) return;
+    const m = /(\d+)\s*$/.exec(c); if (m) max = Math.max(max, Number(m[1]));
+  });
+  return prefixo + ('000' + (max + 1)).slice(prefixo === 'MAN-' ? -4 : -3);
 }
 
 function falha(msg) { const e = new Error(msg); e.paraUsuario = true; return e; }

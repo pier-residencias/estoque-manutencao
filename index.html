@@ -59,6 +59,8 @@
   </div>
 </nav>
 
+<div class="setor-bar" id="setor-bar" hidden><div class="wrap"><span class="setor-lbl">Setor do estoque</span><div class="setor-btns" id="setor-btns" role="group" aria-label="Setor do estoque"></div></div></div>
+
 <main class="wrap">
   <div id="notices"></div>
   <div id="aviso-dem"></div>
@@ -69,7 +71,7 @@
       <button class="kpi" data-go="itens"><span class="lbl">Itens cadastrados</span><span class="val num" id="k-itens">0</span><span class="sub" id="k-itens-sub">nenhum item ainda</span></button>
       <button class="kpi" id="k-dem-box" data-go="demandas"><span class="lbl">Demandas em aberto</span><span class="val num" id="k-dem">0</span><span class="sub" id="k-dem-sub">nenhuma atrasada</span></button>
       <button class="kpi" id="k-os-box" data-go="os"><span class="lbl">OS em aberto</span><span class="val num" id="k-os">0</span><span class="sub" id="k-os-sub">nenhuma atrasada</span></button>
-      <button class="kpi" id="k-baixo-box" data-go="itens" data-filter="baixo"><span class="lbl">Abaixo do mínimo</span><span class="val num" id="k-baixo">0</span><span class="sub" id="k-baixo-sub">tudo em ordem</span></button>
+      <button class="kpi" id="k-baixo-box" data-go="itens" data-filter="baixo"><span class="lbl">Para repor</span><span class="val num" id="k-baixo">0</span><span class="sub" id="k-baixo-sub">tudo em ordem</span></button>
       <button class="kpi" id="k-emp-box" data-go="emprestimos"><span class="lbl">Empréstimos abertos</span><span class="val num" id="k-emp">0</span><span class="sub" id="k-emp-sub">nenhum atrasado</span></button>
       <button class="kpi" data-go="historico"><span class="lbl">Saídas no mês</span><span class="val num" id="k-saidas">0</span><span class="sub" id="k-saidas-sub">retiradas e trocas</span></button>
     </div>
@@ -158,7 +160,7 @@
 
   <!-- REGISTRAR -->
   <section id="t-registrar" hidden>
-    <div class="sec-head"><h2 class="sec">Registrar movimentação</h2><span class="muted">O estoque do item é atualizado na hora.</span></div>
+    <div class="sec-head"><h2 class="sec">Registrar movimentação<span class="setor-nome"></span></h2><span class="muted">O estoque do item é atualizado na hora.</span></div>
     <div class="seg" id="seg">
       <button data-tipo="saida" aria-pressed="true"><b>Saída</b><span>Item retirado para uso</span></button>
       <button data-tipo="entrada" aria-pressed="false"><b>Entrada</b><span>Compra ou recebimento</span></button>
@@ -259,13 +261,13 @@
 
   <!-- ITENS -->
   <section id="t-itens" hidden>
-    <div class="sec-head"><h2 class="sec">Itens do estoque</h2><span class="muted" id="i-count"></span></div>
+    <div class="sec-head"><h2 class="sec">Itens do estoque<span class="setor-nome"></span></h2><span class="muted" id="i-count"></span></div>
     <div class="toolbar">
       <input class="input" id="i-busca" placeholder="Buscar por nome, código ou local" type="search">
       <select class="input" id="i-cat" aria-label="Categoria"><option value="">Todas as categorias</option></select>
       <div class="chips" id="i-status">
         <button class="chip" data-s="" aria-pressed="true">Todos</button>
-        <button class="chip" data-s="baixo" aria-pressed="false">Abaixo do mínimo</button>
+        <button class="chip" data-s="baixo" aria-pressed="false">Para repor</button>
         <button class="chip" data-s="zero" aria-pressed="false">Zerados</button>
       </div>
       <button class="btn" id="i-importar" hidden>Importar inventário</button>
@@ -293,7 +295,7 @@
 
   <!-- HISTÓRICO -->
   <section id="t-historico" hidden>
-    <div class="sec-head"><h2 class="sec">Histórico</h2><span class="muted">Tudo que entrou e saiu, com quem registrou.</span></div>
+    <div class="sec-head"><h2 class="sec">Histórico<span class="setor-nome"></span></h2><span class="muted">Tudo que entrou e saiu, com quem registrou.</span></div>
     <div class="toolbar">
       <input class="input" id="h-mes" type="month" aria-label="Mês" style="flex:0 1 170px">
       <input class="input" id="h-busca" placeholder="Buscar item, pessoa, destino, OS…" type="search">
@@ -327,7 +329,7 @@
 
   <!-- DASHBOARD -->
   <section id="t-dashboard" class="stack" hidden>
-    <div class="sec-head"><h2 class="sec">Dashboard da administração</h2><span class="muted" id="d-resumo"></span></div>
+    <div class="sec-head"><h2 class="sec">Dashboard da administração<span class="setor-nome"></span></h2><span class="muted" id="d-resumo"></span></div>
     <div class="toolbar dash-filtros">
       <div class="chips" id="d-presets" role="group" aria-label="Período">
         <button class="chip" data-p="mes" aria-pressed="true">Este mês</button>
@@ -385,7 +387,7 @@
     </div>
     <div class="sec-head"><h2 class="sec sub-sec">Estoque</h2></div>
     <div class="grid2">
-      <div class="panel"><h3>Estoque crítico</h3><p class="cap">Itens zerados ou abaixo do mínimo hoje</p>
+      <div class="panel"><h3>Estoque crítico</h3><p class="cap">Itens zerados ou no mínimo hoje</p>
         <div class="tablebox flat"><table><thead><tr><th>Item</th><th class="n">Estoque / mín.</th><th>Situação</th></tr></thead><tbody id="d-crit"></tbody></table></div></div>
       <div class="panel"><h3>Itens parados</h3><p class="cap">Com estoque e sem nenhum movimento no período</p>
         <div class="tablebox flat"><table><thead><tr><th>Item</th><th class="n">Estoque</th><th>Último movimento</th></tr></thead><tbody id="d-parados"></tbody></table></div></div>
