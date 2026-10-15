@@ -28,7 +28,7 @@ const S = {
   tab:"painel", tipo:"saida", picked:null, iStatus:"", hTipo:"", histMes:mesDe(), ocupado:false, ultima:null,
   os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null, nfLida:null,
   iPer:{tipo:"", modo:"mes", mes:mesDe(), dia:hoje()}, mesesCarregados:[],
-  setores:["Manutenção"], setor:"Manutenção", empTodos:[], locais:{}, pend:null
+  setores:["Manutenção"], setor:"Manutenção", empTodos:[], locais:{}, pend:null, adm:false
 };
 const setorDe = x => (x && x.setor) || "Manutenção";
 const SETORES_PERM = [["Manutenção","setor_manutencao"],["Limpeza","setor_limpeza"]];
@@ -40,7 +40,15 @@ const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_de
 // o resto do sistema continua funcionando normalmente.
 const TEM_ADM = !!(document.getElementById("tab-adm") && document.getElementById("adm-menu") && document.getElementById("t-pendencias"));
 if (!TEM_ADM) delete ABAS_PERM.pendencias;
-const podeAba = t => (ABAS_PERM[t]||[]).some(can);
+// O que aparece depende de como a pessoa entrou: Manutenção (tudo do estoque, OS e demandas),
+// Limpeza (só o estoque da limpeza) ou Administração (só o menu Administração).
+const ABAS_ADM = ["pendencias"];
+const ABAS_LIMPEZA = ["painel","registrar","itens","historico"];
+const TIPOS_LIMPEZA = ["saida","entrada"];
+const modo = () => S.adm ? "Administração" : S.setor;
+const abaNoModo = t => S.adm ? ABAS_ADM.includes(t) : S.setor === "Limpeza" ? ABAS_LIMPEZA.includes(t) : !ABAS_ADM.includes(t);
+const podeAdm = () => ABAS_ADM.some(t => (ABAS_PERM[t]||[]).some(can));
+const podeAba = t => (ABAS_PERM[t]||[]).some(can) && abaNoModo(t);
 const primeiraAba = () => Object.keys(ABAS_PERM).find(podeAba) || "painel";
 const movsDoMes = ym => S.movs.filter(m => String(m.data).slice(0,7) === ym && doSetor(m));
 
@@ -132,7 +140,7 @@ $("#f-login").addEventListener("submit", async ev => {
     try { localStorage.setItem("estoque-entrada", setorEscolhido); } catch(e){}
     // Entrada pela Administração: abre direto o menu Administração; o estoque fica no setor de sempre
     if (setorEscolhido === "Administração") {
-      const aba = ABAS_ADM.find(podeAba);
+      const aba = ABAS_ADM.find(t => (ABAS_PERM[t]||[]).some(can));
       if (!aba) {
         S.senha = ""; S.perms = {};
         msg.className = "hint err";
@@ -141,6 +149,7 @@ $("#f-login").addEventListener("submit", async ev => {
       }
       let salvo = ""; try { salvo = localStorage.getItem("estoque-setor") || ""; } catch(e){}
       S.setor = permitidos.includes(salvo) ? salvo : permitidos[0]; S.setores = permitidos;
+      S.adm = true; aplicarPermissoes();
       guardar(); $("#login").hidden = true; renderMe(); setTab(aba); atualizar();
       return;
     }
@@ -150,7 +159,7 @@ $("#f-login").addEventListener("submit", async ev => {
       msg.textContent = `Este login não tem acesso ao setor ${setorEscolhido}. Escolha ${permitidos.join(" ou ")}.`;
       return;
     }
-    S.setor = setorEscolhido; S.setores = permitidos;
+    S.setor = setorEscolhido; S.setores = permitidos; S.adm = false; aplicarPermissoes();
     try { localStorage.setItem("estoque-setor", setorEscolhido); } catch(e){}
     guardar(); $("#login").hidden = true; renderMe(); setTab(podeAba(S.tab) ? S.tab : primeiraAba()); atualizar();
   } catch(e){ S.senha = ""; msg.className = "hint err"; msg.textContent = e.message; }
@@ -185,7 +194,6 @@ function setTab(t){
 $$("nav.tabs [role=tablist] > button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
 // ---------- menu Administração ----------
-const ABAS_ADM = ["pendencias"];
 function abrirMenuAdm(abrir){
   if (!TEM_ADM) return;
   const btn = $("#tab-adm"), menu = $("#adm-menu");
@@ -242,13 +250,24 @@ function proxCodigo(){
   return pre + String(max+1).padStart(pre === "MAN-" ? 4 : 3, "0");
 }
 // seletor de setor (Manutenção | Limpeza): aparece para quem vê mais de um
+function modosDisponiveis(){ return S.setores.concat(TEM_ADM && podeAdm() ? ["Administração"] : []); }
 function renderSetorSel(){
   const el = $("#me-setor");
   if (el) {
-    const outro = S.setores.find(x => x !== S.setor);
-    el.innerHTML = `Setor: <b>${esc(S.setor)}</b>${outro ? ` <button class="sair" type="button" data-setor="${esc(outro)}" title="Mudar para ${esc(outro)}">trocar</button>` : ""}`;
+    const outros = modosDisponiveis().filter(x => x !== modo());
+    el.innerHTML = `Setor: <b>${esc(modo())}</b>` + (outros.length === 1
+      ? ` <button class="sair" type="button" data-setor="${esc(outros[0])}" title="Mudar para ${esc(outros[0])}">trocar</button>`
+      : outros.length ? ` · trocar para ${outros.map(x => `<button class="sair" type="button" data-setor="${esc(x)}">${esc(x)}</button>`).join(" ")}` : "");
   }
   $$(".setor-nome").forEach(n => n.textContent = S.setores.length > 1 ? " · " + S.setor : "");
+}
+function mudarModo(x){
+  if (x === modo()) return;
+  if (x === "Administração") { if (!TEM_ADM || !podeAdm()) return; S.adm = true; }
+  else { if (!S.setores.includes(x)) return; S.adm = false; mudarSetor(x); }
+  try { localStorage.setItem("estoque-entrada", x); } catch(e){}
+  aplicarPermissoes(); renderSetorSel();
+  setTab(podeAba(S.tab) ? S.tab : primeiraAba());
 }
 function mudarSetor(x){
   if (x === S.setor || !S.setores.includes(x)) return;
@@ -257,7 +276,7 @@ function mudarSetor(x){
   S.picked = null; S.iStatus = ""; syncChips("#i-status","s",S.iStatus); $("#i-cat").value = "";
   renderSetorSel(); renderAll(); renderSugestoes();
 }
-document.addEventListener("click", e => { const b = e.target.closest("#me-setor [data-setor]"); if (b) { mudarSetor(b.dataset.setor); toast(`Setor ${S.setor}.`); } });
+document.addEventListener("click", e => { const b = e.target.closest("#me-setor [data-setor]"); if (b) { mudarModo(b.dataset.setor); toast(`Setor ${modo()}.`); } });
 const ordMov = (a,b) => String(b.data||"").localeCompare(String(a.data||"")) || String(b.criadoEm||"").localeCompare(String(a.criadoEm||""));
 const sinal = m => (Number(m.delta)>0?"+":Number(m.delta)<0?"−":"");
 
@@ -759,8 +778,9 @@ function aplicarPermissoes(){
     if ($("#tab-adm").hidden) abrirMenuAdm(false);
   }
   const tipos = {saida:"registrar_saida", entrada:"registrar_entrada", troca:"registrar_troca", emprestimo:"registrar_emprestimo"};
-  $$("#seg button").forEach(b => b.hidden = !can(tipos[b.dataset.tipo]));
-  if (!can(tipos[S.tipo])) { const t = Object.keys(tipos).find(k => can(tipos[k])); if (t) setTipo(t); }
+  const tipoOk = k => can(tipos[k]) && (S.setor !== "Limpeza" || TIPOS_LIMPEZA.includes(k));
+  $$("#seg button").forEach(b => b.hidden = !tipoOk(b.dataset.tipo));
+  if (!tipoOk(S.tipo)) { const t = Object.keys(tipos).find(tipoOk); if (t) setTipo(t); }
   $("#i-novo").hidden = !can("itens_cadastrar");
   $("#i-importar").hidden = !can("itens_editar");
   $("#o-nova").hidden = !can("os_abrir");
@@ -770,7 +790,7 @@ function aplicarPermissoes(){
   $("#k-os-box").hidden = $("#p-os-box").hidden = !podeAba("os");
   $("#m-osref-box").hidden = !podeAba("os") || !["saida","troca"].includes(S.tipo);
   $("#m-novo").closest(".hint").hidden = !can("itens_cadastrar");
-  $$(".kpi[data-go]").forEach(k => k.disabled = !podeAba(k.dataset.go));
+  $$(".kpi[data-go]").forEach(k => { k.disabled = !podeAba(k.dataset.go); if (!k.id || !/^k-(dem|os)-box$/.test(k.id)) k.hidden = !podeAba(k.dataset.go); });
 }
 
 // ---------- dica flutuante dos gráficos ----------
@@ -1454,7 +1474,7 @@ const temFone = usuario => { const c = S.colab.find(x => x.usuario === usuario);
 // destaque para quem recebeu demandas novas
 function renderAvisoDem(){
   const el = $("#aviso-dem"); if (!el) return;
-  const novas = S.senha && can("dem_executar") ? minhasNovas().sort(ordemDem) : [];
+  const novas = S.senha && can("dem_executar") && podeAba("demandas") ? minhasNovas().sort(ordemDem) : [];
   if (!novas.length) { el.innerHTML = ""; return; }
   el.innerHTML = `<div class="aviso-dem" role="status">
     <div class="aviso-txt"><b class="aviso-tit">${novas.length===1 ? "Você recebeu 1 demanda nova" : `Você recebeu ${novas.length} demandas novas`}</b>
@@ -2653,8 +2673,8 @@ renderAll();
 const sess = lerSessao();
 if (sess && sess.senha && sess.usuario) {
   S.usuario = sess.usuario || ""; S.senha = sess.senha;
-  try { S.setor = localStorage.getItem("estoque-setor") || S.setor; } catch(e){}
-  api("entrar").then(() => { renderMe(); setTab(podeAba(S.tab) ? S.tab : primeiraAba()); atualizar(); }).catch(e => { S.senha = ""; mostrarLogin(e.message); });
+  try { S.setor = localStorage.getItem("estoque-setor") || S.setor; S.adm = localStorage.getItem("estoque-entrada") === "Administração"; } catch(e){}
+  api("entrar").then(() => { if (S.adm && !(TEM_ADM && podeAdm())) S.adm = false; aplicarPermissoes(); renderMe(); setTab(podeAba(S.tab) ? S.tab : primeiraAba()); atualizar(); }).catch(e => { S.senha = ""; mostrarLogin(e.message); });
 } else {
   mostrarLogin("");
 }
