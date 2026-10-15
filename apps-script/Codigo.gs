@@ -102,7 +102,8 @@ const ABAS = {
       ['id', 'ID'], ['secao', 'Seção'], ['numero', 'Nº'], ['titulo', 'Pendência'], ['status', 'Situação'],
       ['responsavel', 'Responsável'], ['prazo', 'Prazo'], ['obs', 'Observação'], ['ordem', 'Ordem'],
       ['atualizadoEm', 'Atualizado em'], ['atualizadoPor', 'Atualizado por'],
-      ['criadaPor', 'Incluída por'], ['origem', 'Origem'], ['vistaEm', 'Vista em'], ['vistaPor', 'Vista por']
+      ['criadaPor', 'Incluída por'], ['origem', 'Origem'], ['vistaEm', 'Vista em'], ['vistaPor', 'Vista por'],
+      ['criticidade', 'Criticidade']
     ],
     num: ['ordem']
   }
@@ -174,7 +175,7 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
-const VERSAO = '2026-10-15 síndico';
+const VERSAO = '2026-10-15 criticidade';
 
 function doGet() {
   return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
@@ -1660,6 +1661,7 @@ const PEND_SECOES = [
   'Manutenção / limpeza / jardinagem',
   'Outras demandas da administração'
 ];
+const PEND_CRITICIDADE = ['Baixa', 'Média', 'Alta'];
 const PEND_STATUS = ['Pendente', 'A cotar', 'Em andamento', 'Aguardando entrega', 'Aguardando síndico', 'Concluído'];
 
 // Lista do Sr. Fernando (e-mail de 13/10/2026), com os status do relatório de 14/10.
@@ -1749,7 +1751,7 @@ function pendLista() {
   return lista
     .map(p => ({ id: p.id, secao: p.secao, numero: p.numero, titulo: p.titulo, status: p.status, responsavel: p.responsavel,
       prazo: p.prazo, obs: p.obs, ordem: p.ordem, atualizadoEm: p.atualizadoEm, atualizadoPor: p.atualizadoPor,
-      criadaPor: p.criadaPor, origem: p.origem, vistaEm: p.vistaEm, vistaPor: p.vistaPor }))
+      criadaPor: p.criadaPor, origem: p.origem, vistaEm: p.vistaEm, vistaPor: p.vistaPor, criticidade: p.criticidade }))
     .sort((a, b) => (Number(a.ordem) || 1e9) - (Number(b.ordem) || 1e9));
 }
 
@@ -1766,7 +1768,7 @@ function pendSemear(t) {
       conta[x[0]] = (conta[x[0]] || 0) + 1;
       const o = { id: 'pd' + ('00' + (i + 1)).slice(-3), secao: PEND_SECOES[x[0]], numero: x[1], titulo: x[2], status: x[3],
         responsavel: '', prazo: '', obs: x[4], ordem: x[0] * 1000 + conta[x[0]], atualizadoEm: quando, atualizadoPor: 'Relatório de 14/10',
-        criadaPor: '', origem: '', vistaEm: '', vistaPor: '' };
+        criadaPor: '', origem: '', vistaEm: '', vistaPor: '', criticidade: '' };
       const r = new Array(t.ncol).fill('');
       t.def.cols.forEach(([k]) => { r[t.idx[k]] = k === 'ordem' ? o[k] : (o[k] === undefined || o[k] === null ? '' : String(o[k])); });
       return r;
@@ -1802,11 +1804,12 @@ function pendSalvar(v, conta) {
   if ('titulo' in v) { obj.titulo = texto(v.titulo, 300); if (!obj.titulo) throw falha('Descreva a pendência.'); }
   if ('status' in v) { if (PEND_STATUS.indexOf(v.status) < 0) throw falha('Situação inválida.'); obj.status = v.status; }
   if ('responsavel' in v) obj.responsavel = texto(v.responsavel, 60);
+  if ('criticidade' in v) { if (v.criticidade && PEND_CRITICIDADE.indexOf(v.criticidade) < 0) throw falha('Criticidade inválida.'); obj.criticidade = v.criticidade || ''; }
   if ('prazo' in v) obj.prazo = /^\d{4}-\d{2}-\d{2}$/.test(String(v.prazo || '')) ? String(v.prazo) : '';
   if ('obs' in v) obj.obs = texto(v.obs, 1000);
   if (atual) {
     gravar(t, obj, atual._row);
-    return obj.status ? 'Situação: ' + obj.status + '.' : 'Salvo.';
+    return obj.status ? 'Situação: ' + obj.status + '.' : 'criticidade' in v && Object.keys(v).length <= 2 ? 'Criticidade: ' + (obj.criticidade || 'sem definição') + '.' : 'Salvo.';
   }
   const secao = PEND_SECOES.indexOf(v.secao) >= 0 ? v.secao : PEND_SECOES[PEND_SECOES.length - 1];
   if (!obj.titulo) throw falha('Descreva a pendência.');
@@ -1817,7 +1820,7 @@ function pendSalvar(v, conta) {
     id: novoId('pd'), secao,
     numero: String((nums.length ? Math.max.apply(null, nums) : 0) + 1),
     status: obj.status || 'Pendente', responsavel: obj.responsavel || '', prazo: obj.prazo || '', obs: obj.obs || '',
-    criadaPor: conta.nome, origem: sindico ? 'Síndico' : '', vistaEm: '', vistaPor: '',
+    criadaPor: conta.nome, origem: sindico ? 'Síndico' : '', vistaEm: '', vistaPor: '', criticidade: obj.criticidade || '',
     ordem: Math.max.apply(null, [base].concat(daSecao.map(p => Number(p.ordem) || 0))) + 1
   });
   gravar(t, obj);

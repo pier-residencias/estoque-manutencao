@@ -2453,10 +2453,12 @@ const PD_SECOES = [
 ];
 const PD_OUTRAS = PD_SECOES[PD_SECOES.length-1].nome;
 const PD_STATUS = ["Pendente","A cotar","Em andamento","Aguardando entrega","Aguardando síndico","Concluído"];
+const PD_CRIT = ["Alta","Média","Baixa"];
+const pdTemCrit = () => !S.pend || !S.pend.length || ("criticidade" in S.pend[0]);
 const pdNova = p => p.origem === "Síndico" && !p.vistaEm;
-const PD = { novas:false, rows:new Map(), secs:new Map(), timers:new Map(), fila:Promise.resolve(), salvando:0, q:"", st:"", resp:"", hide:false, late:false, carregando:false };
-try { const f = JSON.parse(localStorage.getItem("pd-filtros")||"{}"); ["q","st","resp","hide"].forEach(k => { if (k in f) PD[k] = f[k]; }); } catch(e){}
-const pdGuardarFiltros = () => { try { localStorage.setItem("pd-filtros", JSON.stringify({q:PD.q, st:PD.st, resp:PD.resp, hide:PD.hide})); } catch(e){} };
+const PD = { novas:false, rows:new Map(), secs:new Map(), timers:new Map(), fila:Promise.resolve(), salvando:0, q:"", st:"", crit:"", resp:"", hide:false, late:false, carregando:false };
+try { const f = JSON.parse(localStorage.getItem("pd-filtros")||"{}"); ["q","st","crit","resp","hide"].forEach(k => { if (k in f) PD[k] = f[k]; }); } catch(e){}
+const pdGuardarFiltros = () => { try { localStorage.setItem("pd-filtros", JSON.stringify({q:PD.q, st:PD.st, crit:PD.crit, resp:PD.resp, hide:PD.hide})); } catch(e){} };
 const pdSecaoDe = p => PD_SECOES.some(s => s.nome === p.secao) ? p.secao : PD_OUTRAS;
 const pdAtrasada = p => p.prazo && p.status !== "Concluído" && p.prazo < hoje();
 const pdLista = () => (S.pend || []).slice().sort((a,b) => (Number(a.ordem)||9e9) - (Number(b.ordem)||9e9));
@@ -2502,6 +2504,9 @@ function pdFiltros(){
   const fs = $("#pd-fs");
   if (!fs.options.length) fs.innerHTML = `<option value="">Todas as situações</option>` + PD_STATUS.map(s => `<option>${esc(s)}</option>`).join("");
   fs.value = PD.st;
+  const fc = $("#pd-fc");
+  if (!fc.options.length) fc.innerHTML = `<option value="">Todas as criticidades</option>` + PD_CRIT.map(s => `<option>${esc(s)}</option>`).join("") + `<option value="__sem">Sem criticidade</option>`;
+  fc.value = PD.crit;
   const resps = [...new Set(pdLista().map(p => (p.responsavel||"").trim()).filter(Boolean))].sort((a,b) => a.localeCompare(b,"pt-BR"));
   const fr = $("#pd-fr");
   fr.innerHTML = `<option value="">Todos os responsáveis</option><option value="__sem">Sem responsável</option>` + resps.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("");
@@ -2510,6 +2515,8 @@ function pdFiltros(){
   $("#pd-hide").checked = PD.hide;
 }
 function pdPassa(p){
+  if (PD.crit === "__sem" && p.criticidade) return false;
+  if (PD.crit && PD.crit !== "__sem" && p.criticidade !== PD.crit) return false;
   if (PD.hide && p.status === "Concluído") return false;
   if (PD.st && p.status !== PD.st) return false;
   const r = (p.responsavel||"").trim();
@@ -2529,12 +2536,14 @@ function pdResumo(){
     {l:"a cotar", v:n("A cotar"), st:"A cotar"}, {l:"pendentes", v:n("Pendente"), st:"Pendente"},
     {l:"concluídas", v:feitas, st:"Concluído"}, {l:"atrasadas", v:atrasadas, st:"", late:true}
   ];
+  const altas = all.filter(p => p.criticidade === "Alta" && p.status !== "Concluído").length;
+  if (pdTemCrit()) itens.splice(1, 0, {l:"alta criticidade em aberto", v:altas, st:"", crit:"Alta"});
   const novas = all.filter(pdNova).length;
   if (PD.novas && !novas) PD.novas = false;
   if (novas && !ehSindico()) itens.unshift({l: novas === 1 ? "nova do síndico" : "novas do síndico", v:novas, st:"", novas:true});
-  const marcado = it => it.novas ? PD.novas : it.late ? PD.late : (!PD.late && !PD.novas && PD.st === it.st && (it.st || it.l === "pendências"));
-  $("#pd-stats").innerHTML = itens.map((it,i) => `<button type="button" class="pd-stat ${it.late?"late":""} ${it.novas?"nova":""}" data-i="${i}" aria-pressed="${marcado(it) ? "true" : "false"}"><b>${it.v}</b><span>${esc(it.l)}</span></button>`).join("");
-  $$("#pd-stats .pd-stat").forEach(b => b.onclick = () => { const it = itens[+b.dataset.i]; PD.st = it.st; PD.late = !!it.late; PD.novas = !!it.novas; if (it.st === "Concluído" || it.novas) PD.hide = false; pdGuardarFiltros(); renderPend(); });
+  const marcado = it => it.novas ? PD.novas : it.late ? PD.late : it.crit ? (PD.crit === it.crit && PD.hide && !PD.st) : (!PD.late && !PD.novas && PD.st === it.st && (it.st || (it.l === "pendências" && !PD.crit)));
+  $("#pd-stats").innerHTML = itens.map((it,i) => `<button type="button" class="pd-stat ${it.late?"late":""} ${it.novas?"nova":""} ${it.crit?"alta":""}" data-i="${i}" aria-pressed="${marcado(it) ? "true" : "false"}"><b>${it.v}</b><span>${esc(it.l)}</span></button>`).join("");
+  $$("#pd-stats .pd-stat").forEach(b => b.onclick = () => { const it = itens[+b.dataset.i]; PD.st = it.st; PD.late = !!it.late; PD.novas = !!it.novas; PD.crit = it.crit || ""; if (it.crit) PD.hide = true; if (it.st === "Concluído" || it.novas) PD.hide = false; pdGuardarFiltros(); renderPend(); });
   const pct = all.length ? Math.round(feitas/all.length*100) : 0;
   $("#pd-bar").style.width = pct + "%";
   $("#pd-prog").textContent = all.length ? `${feitas} de ${all.length} concluídas (${pct}%)` + (PD.late ? " · mostrando só as atrasadas" : PD.novas ? " · mostrando só as novas do síndico" : "") : "Nenhuma pendência cadastrada";
@@ -2549,6 +2558,9 @@ function pdLinha(id){
   f.st.innerHTML = PD_STATUS.map(s => `<option>${esc(s)}</option>`).join("");
   f.resp = pdEl("input", {class:"input", list:"pd-resps", placeholder:"Responsável", "aria-label":"Responsável", id:"pdr-"+id});
   f.prazo = pdEl("input", {class:"input pd-prazo", type:"date", "aria-label":"Prazo", id:"pdp-"+id});
+  f.crit = pdEl("select", {class:"input pd-crit", "aria-label":"Criticidade", id:"pdc-"+id});
+  f.crit.innerHTML = `<option value="">Criticidade</option>` + ["Baixa","Média","Alta"].map(s => `<option>${esc(s)}</option>`).join("");
+  f.crit.addEventListener("change", () => { f.crit.dataset.c = f.crit.value; pdSalvar(id, {criticidade:f.crit.value}); });
   f.del = pdEl("button", {class:"pd-del", type:"button", title:"Excluir pendência", "aria-label":"Excluir pendência", text:"×"});
   f.tit.addEventListener("input", () => { pdAuto(f.tit); if (f.tit.value.trim()) pdSalvarDepois(id, "titulo", f.tit.value.trim()); });
   f.obs.addEventListener("input", () => { pdAuto(f.obs); pdSalvarDepois(id, "obs", f.obs.value); });
@@ -2559,6 +2571,7 @@ function pdLinha(id){
   const el = pdEl("div", {class:"pd-row"}, [
     f.num, pdEl("div", {class:"pd-main"}, [f.tit, f.obs, f.meta]),
     pdEl("div", {class:"c-st"}, [pdEl("div", {class:"pd-lbl", text:"Situação"}), f.st]),
+    pdEl("div", {class:"c-crit"}, [pdEl("div", {class:"pd-lbl", text:"Criticidade"}), f.crit]),
     pdEl("div", {class:"c-resp"}, [pdEl("div", {class:"pd-lbl", text:"Responsável"}), f.resp]),
     pdEl("div", {class:"c-prazo"}, [pdEl("div", {class:"pd-lbl", text:"Prazo"}), f.prazo]),
     pdEl("div", {class:"c-del"}, [f.del])
@@ -2571,6 +2584,9 @@ function pdAtualizar(p){
   f.num.textContent = p.numero || "—";
   pdPor(f.tit, p.titulo||""); pdPor(f.obs, p.obs||""); pdPor(f.resp, p.responsavel||""); pdPor(f.prazo, p.prazo||"");
   if (document.activeElement !== f.st) { f.st.value = PD_STATUS.includes(p.status) ? p.status : "Pendente"; f.st.dataset.s = f.st.value; }
+  if (document.activeElement !== f.crit) { f.crit.value = PD_CRIT.includes(p.criticidade) ? p.criticidade : ""; f.crit.dataset.c = f.crit.value; }
+  f.crit.disabled = !pdTemCrit();
+  r.el.classList.toggle("alta", p.criticidade === "Alta" && p.status !== "Concluído");
   const nova = pdNova(p);
   const quando = p.atualizadoEm ? `Atualizado em ${fData(p.atualizadoEm)} ${String(p.atualizadoEm).slice(11,16)}${p.atualizadoPor ? " por "+p.atualizadoPor : ""}` : "";
   const assinatura = [nova, p.criadaPor, quando, ehSindico()].join("|");
@@ -2623,7 +2639,8 @@ function renderPend(){
   const body = $("#pd-body");
   if (!PD.secs.size) { body.textContent = ""; PD_SECOES.forEach(s => body.append(pdSecao(s).sec)); }
   pdBadge();
-  const all = pdLista(), filtro = !!(PD.q || PD.st || PD.resp || PD.hide || PD.late || PD.novas);
+  $("#pd-aviso").hidden = pdTemCrit();
+  const all = pdLista(), filtro = !!(PD.q || PD.st || PD.crit || PD.resp || PD.hide || PD.late || PD.novas);
   for (const s of PD_SECOES) {
     const o = PD.secs.get(s.nome);
     const daSecao = all.filter(p => pdSecaoDe(p) === s.nome);
@@ -2662,27 +2679,31 @@ function pdAbrirNova(secaoPadrao){
         <textarea class="input" id="np-tit" rows="2" placeholder="Ex.: Trocar a fechadura da porta do salão de festas"></textarea></div>
       <div class="field full"><label for="np-obs">Detalhes</label>
         <textarea class="input" id="np-obs" rows="3" placeholder="Opcional: local, quem pediu, o que já foi feito"></textarea></div>
+      <div class="field"><label for="np-crit">Criticidade <span class="req">*</span></label>
+        <select class="input" id="np-crit"><option value="">Escolha</option><option>Baixa</option><option>Média</option><option>Alta</option></select></div>
       <div class="field"><label for="np-prazo">Prazo</label><input class="input" id="np-prazo" type="date"></div>
-      <div class="field"><label for="np-resp">Responsável</label><input class="input" id="np-resp" list="pd-resps" placeholder="Opcional"></div>
+      <div class="field full"><label for="np-resp">Responsável</label><input class="input" id="np-resp" list="pd-resps" placeholder="Opcional"></div>
       ${ehSindico() ? `<p class="hint full">A administração recebe a pendência destacada como "Nova do síndico".</p>` : ""}
       <div class="full actions"><button class="btn primary" type="submit" id="np-ok">Incluir pendência</button><button class="btn" type="button" id="np-no">Cancelar</button><span class="hint" id="np-msg"></span></div>
     </form>`;
   $("#modal").hidden = false;
   (padrao ? $("#np-tit") : $("#np-sec")).focus();
   $("#np-no").onclick = fecharModal;
-  ["#np-sec","#np-tit"].forEach(s => $(s).addEventListener("input", () => { const m = $("#np-msg"); if (m.classList.contains("err")) { m.textContent = ""; m.className = "hint"; } }));
+  ["#np-sec","#np-tit","#np-crit"].forEach(s => $(s).addEventListener("input", () => { const m = $("#np-msg"); if (m.classList.contains("err")) { m.textContent = ""; m.className = "hint"; } }));
   $("#f-pend").addEventListener("submit", ev => {
     ev.preventDefault();
     const msg = $("#np-msg"); msg.className = "hint err";
     const secao = $("#np-sec").value, titulo = $("#np-tit").value.trim();
     if (!secao) { msg.textContent = "Escolha a seção."; $("#np-sec").focus(); return; }
     if (!titulo) { msg.textContent = "Descreva a pendência."; $("#np-tit").focus(); return; }
+    const criticidade = $("#np-crit").value;
+    if (!criticidade) { msg.textContent = "Escolha a criticidade."; $("#np-crit").focus(); return; }
     const antes = new Set((S.pend||[]).map(p => p.id));
     const ok = $("#np-ok"); ok.disabled = true; msg.className = "hint"; msg.innerHTML = `<span class="spin" aria-hidden="true"></span> Salvando…`;
-    pdEnviar("pendSalvar", {pend:{secao, titulo, obs:$("#np-obs").value.trim(), prazo:$("#np-prazo").value, responsavel:$("#np-resp").value.trim()}}).then(res => {
+    pdEnviar("pendSalvar", {pend:{secao, titulo, obs:$("#np-obs").value.trim(), prazo:$("#np-prazo").value, responsavel:$("#np-resp").value.trim(), criticidade}}).then(res => {
       if (!res) { ok.disabled = false; msg.className = "hint err"; msg.textContent = "Não foi possível incluir. Tente de novo."; return; }
       fecharModal();
-      PD.q = ""; PD.st = ""; PD.resp = ""; PD.late = false; PD.novas = false; pdGuardarFiltros();
+      PD.q = ""; PD.st = ""; PD.crit = ""; PD.resp = ""; PD.late = false; PD.novas = false; pdGuardarFiltros();
       if (S.tab !== "pendencias") setTab("pendencias"); else renderPend();
       const nova = (res.pendencias||[]).find(p => !antes.has(p.id));
       const r = nova && PD.rows.get(nova.id);
@@ -2699,6 +2720,7 @@ function pdTextoEmail(){
       const sub = String(p.numero||"").includes(".");
       let ln = (sub ? "    • " : p.numero ? p.numero + ". " : "• ") + String(p.titulo||"").trim() + " – " + (p.status || "Pendente");
       const x = [];
+      if (p.criticidade) x.push("criticidade " + String(p.criticidade).toLowerCase());
       if (String(p.obs||"").trim()) x.push(String(p.obs).trim());
       if (p.prazo && p.status !== "Concluído") x.push("prazo " + fData(p.prazo).slice(0,5));
       if (String(p.responsavel||"").trim()) x.push("resp.: " + String(p.responsavel).trim());
@@ -2715,6 +2737,7 @@ $("#pd-nova").addEventListener("click", () => pdAbrirNova());
 $("#pd-body").addEventListener("click", e => { const b = e.target.closest("[data-ciente]"); if (!b) return; b.disabled = true; pdEnviar("pendSalvar", {pend:{id:b.dataset.ciente, ciente:true}}); });
 $("#pd-q").addEventListener("input", e => { PD.q = e.target.value.trim(); PD.late = false; pdGuardarFiltros(); renderPend(); });
 $("#pd-fs").addEventListener("change", e => { PD.st = e.target.value; PD.late = false; pdGuardarFiltros(); renderPend(); });
+$("#pd-fc").addEventListener("change", e => { PD.crit = e.target.value; pdGuardarFiltros(); renderPend(); });
 $("#pd-fr").addEventListener("change", e => { PD.resp = e.target.value; pdGuardarFiltros(); renderPend(); });
 $("#pd-hide").addEventListener("change", e => { PD.hide = e.target.checked; pdGuardarFiltros(); renderPend(); });
 $("#pd-mail").addEventListener("click", () => {

@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500&family=Public+Sans:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="estilo.css?v=20261015e">
+<link rel="stylesheet" href="estilo.css?v=20261015f">
 </head>
 <body>
 <div class="login" id="login" hidden>
@@ -427,9 +427,11 @@
     <div class="sec-head"><h2 class="sec">Controle de pendências</h2><span class="muted">Lista do síndico. Cada alteração vai direto para a aba Pendencias da planilha.</span><button class="btn primary" type="button" id="pd-nova">+ Incluir pendência</button></div>
     <div class="pd-stats" id="pd-stats"></div>
     <div class="pd-prog"><span class="track"><i id="pd-bar"></i></span><span id="pd-prog">Carregando…</span></div>
+    <div class="notice warn" id="pd-aviso" hidden>Para gravar a criticidade, a planilha precisa do código novo do Apps Script (colar, executar <b>autorizar</b> e implantar uma nova versão).</div>
     <div class="toolbar">
       <input class="input" id="pd-q" type="search" placeholder="Buscar pendência, observação ou responsável">
       <select class="input" id="pd-fs" aria-label="Filtrar por situação"></select>
+      <select class="input" id="pd-fc" aria-label="Filtrar por criticidade"></select>
       <select class="input" id="pd-fr" aria-label="Filtrar por responsável"></select>
       <label class="pd-chk"><input type="checkbox" id="pd-hide"> Ocultar concluídas</label>
       <button class="btn primary" type="button" id="pd-mail">Gerar texto para e-mail</button>
@@ -443,7 +445,7 @@
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script src="config.js"></script>
-<script src="nfe.js?v=20261015e"></script>
-<script src="app.js?v=20261015e"></script>
+<script src="nfe.js?v=20261015f"></script>
+<script src="app.js?v=20261015f"></script>
 </body>
 </html>
