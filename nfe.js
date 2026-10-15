@@ -3,6 +3,8 @@
 (function (raiz) {
   "use strict";
   const NUM = "\\d{1,3}(?:\\.\\d{3})*,\\d{2,10}";
+  // quantidade: algumas lojas escrevem sem casas decimais ("8" em vez de "8,0000")
+  const QTD = "\\d{1,3}(?:\\.\\d{3})*(?:,\\d{1,10})?";
   const UNIDADES = "UN|UND|UNID|PC|PCS|PCT|PT|CX|M|MT|MTS|M2|M3|KG|G|GR|L|LT|ML|RL|RLO|SC|SACO|GL|GALAO|JG|KIT|PAR|BD|BL|FD|TB|CJ|CT|LATA|LT|FR|BR|BARRA|DZ|CENTO|MIL|TON";
   const numBR = s => Number(String(s).replace(/\./g, "").replace(",", "."));
 
@@ -48,6 +50,12 @@
 
     out.fornecedor = um(/RECEBEMOS DE\s+(.+?)\s+OS PRODUTOS/i).replace(/\s{2,}/g, " ");
     if (!out.fornecedor) {
+      // nome do emitente na linha de baixo do canhoto
+      const i = linhas.findIndex(l => /RECEBEMOS DE/i.test(l));
+      const prox = i >= 0 ? (linhas[i + 1] || "").split(/\s{2,}/)[0].trim() : "";
+      if (prox && /[a-z]{3}/i.test(prox) && !/^(N[º°o]|DATA|S[ÉE]RIE|DANFE)/i.test(prox)) out.fornecedor = prox;
+    }
+    if (!out.fornecedor) {
       const i = linhas.findIndex(l => /IDENTIFICA[CÇ][AÃ]O DO EMITENTE/i.test(l));
       if (i >= 0) out.fornecedor = (linhas.slice(i + 1, i + 4).map(l => l.split(/\s{2,}/)[0].trim()).filter(Boolean)[0] || "");
     }
@@ -65,7 +73,7 @@
     if (ini < 0) ini = 0;
     let fim = linhas.findIndex((l, i) => i > ini && /DADOS ADICIONAIS|C[AÁ]LCULO DO ISSQN|INFORMA[CÇ][OÕ]ES COMPLEMENTARES/i.test(l));
     if (fim < 0) fim = linhas.length;
-    const reCompleta = new RegExp("^\\s*(\\S+)\\s+(.+?)\\s+(\\d{8})\\s+(\\d{3,4})\\s+(\\d{4})\\s+([A-Za-z][A-Za-z0-9]{0,5})\\s+(" + NUM + ")\\s+(" + NUM + ")\\s+(" + NUM + ")");
+    const reCompleta = new RegExp("^\\s*(\\S+)\\s+(.+?)\\s+(\\d{8})\\s+(\\d{3,4})\\s+(\\d{4})\\s+([A-Za-z][A-Za-z0-9]{0,5})\\s+(" + QTD + ")\\s+(" + NUM + ")\\s+(" + NUM + ")");
     const reSimples = new RegExp("^\\s*(?:(\\d{3,14})\\s+)?(.+?)\\s+(" + UNIDADES + ")\\s+(" + NUM + ")\\s+(" + NUM + ")\\s+(" + NUM + ")", "i");
     const cabecalho = /DESCRI[CÇ][AÃ]O|C[OÓ]DIGO|QUANT|UNIT[AÁ]RIO|PROD\.|CSOSN|AL[IÍ]QUOTAS|NCM/i;
     let ultimo = null;
