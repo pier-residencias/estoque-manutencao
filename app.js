@@ -36,6 +36,10 @@ const setoresDasPerms = p => { const l = SETORES_PERM.filter(x => p && p[x[1]]).
 const doSetor = x => setorDe(x) === S.setor;
 const can = p => !!(S.perms && S.perms[p]);
 const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"], pendencias:["pendencias"]};
+// Se o navegador ainda estiver com a página antiga guardada, o menu Administração não existe nela:
+// o resto do sistema continua funcionando normalmente.
+const TEM_ADM = !!(document.getElementById("tab-adm") && document.getElementById("adm-menu") && document.getElementById("t-pendencias"));
+if (!TEM_ADM) delete ABAS_PERM.pendencias;
 const podeAba = t => (ABAS_PERM[t]||[]).some(can);
 const primeiraAba = () => Object.keys(ABAS_PERM).find(podeAba) || "painel";
 const movsDoMes = ym => S.movs.filter(m => String(m.data).slice(0,7) === ym && doSetor(m));
@@ -149,9 +153,11 @@ function renderMe(){
 function setTab(t){
   if (S.senha && !podeAba(t)) t = primeiraAba();
   S.tab = t;
-  $$("nav.tabs .tabscroll > button[data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===t ? "true":"false"));
-  $("#tab-adm").classList.toggle("on", ABAS_ADM.includes(t));
-  $$("#adm-menu [data-adm-tab]").forEach(b => { if (b.dataset.admTab===t) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current"); });
+  $$("nav.tabs [role=tablist] > button[data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===t ? "true":"false"));
+  if (TEM_ADM) {
+    $("#tab-adm").classList.toggle("on", ABAS_ADM.includes(t));
+    $$("#adm-menu [data-adm-tab]").forEach(b => { if (b.dataset.admTab===t) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current"); });
+  }
   $$("main > section").forEach(s => s.hidden = s.id !== "t-"+t);
   renderSetorSel();
   renderAll();
@@ -161,11 +167,12 @@ function setTab(t){
   window.scrollTo({top:0});
   try{ history.replaceState(null,"","#"+t); }catch(e){}
 }
-$$("nav.tabs .tabscroll > button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+$$("nav.tabs [role=tablist] > button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
 // ---------- menu Administração ----------
 const ABAS_ADM = ["pendencias"];
 function abrirMenuAdm(abrir){
+  if (!TEM_ADM) return;
   const btn = $("#tab-adm"), menu = $("#adm-menu");
   if (!abrir) { if (!menu.hidden) { menu.hidden = true; btn.setAttribute("aria-expanded","false"); } return; }
   const nav = $("nav.tabs").getBoundingClientRect(), r = btn.getBoundingClientRect();
@@ -175,6 +182,7 @@ function abrirMenuAdm(abrir){
   btn.setAttribute("aria-expanded","true");
   const first = menu.querySelector("button:not([hidden])"); if (first) first.focus();
 }
+if (TEM_ADM) {
 $("#tab-adm").addEventListener("click", e => { e.stopPropagation(); abrirMenuAdm($("#adm-menu").hidden); });
 $("#adm-menu").addEventListener("click", e => { const b = e.target.closest("[data-adm-tab]"); if (!b) return; abrirMenuAdm(false); setTab(b.dataset.admTab); });
 $("#adm-menu").addEventListener("keydown", e => {
@@ -186,6 +194,7 @@ $("#adm-menu").addEventListener("keydown", e => {
 document.addEventListener("click", e => { if (!e.target.closest("#adm-menu") && !e.target.closest("#tab-adm")) abrirMenuAdm(false); });
 window.addEventListener("resize", () => abrirMenuAdm(false));
 $("nav.tabs .tabscroll").addEventListener("scroll", () => abrirMenuAdm(false), {passive:true});
+}
 $$(".kpi").forEach(k => k.addEventListener("click", () => {
   if (k.dataset.filter) { S.iStatus = k.dataset.filter; syncChips("#i-status","s",S.iStatus); }
   setTab(k.dataset.go);
@@ -728,10 +737,12 @@ function renderAll(){
 
 // ---------- permissões na tela ----------
 function aplicarPermissoes(){
-  $$("nav.tabs .tabscroll > button[data-tab]").forEach(b => b.hidden = !podeAba(b.dataset.tab));
-  $$("#adm-menu [data-adm-tab]").forEach(b => b.hidden = !podeAba(b.dataset.admTab));
-  $("#tab-adm").hidden = !ABAS_ADM.some(podeAba);
-  if ($("#tab-adm").hidden) abrirMenuAdm(false);
+  $$("nav.tabs [role=tablist] > button[data-tab]").forEach(b => b.hidden = !podeAba(b.dataset.tab));
+  if (TEM_ADM) {
+    $$("#adm-menu [data-adm-tab]").forEach(b => b.hidden = !podeAba(b.dataset.admTab));
+    $("#tab-adm").hidden = !ABAS_ADM.some(podeAba);
+    if ($("#tab-adm").hidden) abrirMenuAdm(false);
+  }
   const tipos = {saida:"registrar_saida", entrada:"registrar_entrada", troca:"registrar_troca", emprestimo:"registrar_emprestimo"};
   $$("#seg button").forEach(b => b.hidden = !can(tipos[b.dataset.tipo]));
   if (!can(tipos[S.tipo])) { const t = Object.keys(tipos).find(k => can(tipos[k])); if (t) setTipo(t); }
@@ -2409,7 +2420,7 @@ const pdEl = (tag, attrs={}, kids=[]) => { const n = document.createElement(tag)
 const pdAuto = t => { t.style.height = "auto"; t.style.height = t.scrollHeight + "px"; };
 
 async function carregarPend(){
-  if (!can("pendencias") || PD.carregando) return;
+  if (!TEM_ADM || !can("pendencias") || PD.carregando) return;
   PD.carregando = true;
   try { const r = await api("pendencias"); if (!PD.salvando) S.pend = r.pendencias || []; renderPend(); }
   catch(e){ if (!S.pend) $("#pd-body").innerHTML = `<div class="notice crit">${esc(e.message)}</div>`; toast(e.message, true); }
@@ -2549,7 +2560,7 @@ function pdNovo(secao){
   o.list.prepend(form); inp.focus();
 }
 function renderPend(){
-  if (!can("pendencias") || !S.pend) return;
+  if (!TEM_ADM || !can("pendencias") || !S.pend) return;
   pdFiltros(); pdResumo();
   const body = $("#pd-body");
   if (!PD.secs.size) { body.textContent = ""; PD_SECOES.forEach(s => body.append(pdSecao(s).sec)); }
@@ -2594,6 +2605,7 @@ function pdTextoEmail(){
   L.push("Fico à disposição.", "", "Atenciosamente,", S.nome || "");
   return L.join("\n");
 }
+if (TEM_ADM) {
 $("#pd-q").addEventListener("input", e => { PD.q = e.target.value.trim(); PD.late = false; pdGuardarFiltros(); renderPend(); });
 $("#pd-fs").addEventListener("change", e => { PD.st = e.target.value; PD.late = false; pdGuardarFiltros(); renderPend(); });
 $("#pd-fr").addEventListener("change", e => { PD.resp = e.target.value; pdGuardarFiltros(); renderPend(); });
@@ -2614,6 +2626,7 @@ $("#pd-mail").addEventListener("click", () => {
   };
   $("#pd-mail-c").focus();
 });
+}
 
 // ---------- início ----------
 $("#m-data").value = hoje();
