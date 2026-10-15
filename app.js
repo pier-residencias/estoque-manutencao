@@ -111,7 +111,7 @@ function renderNotices(){
 // ---------- entrada ----------
 function mostrarLogin(msg){
   $("#login").hidden = false;
-  try { const s0 = localStorage.getItem("estoque-setor"); if (s0 && [...$("#l-setor").options].some(o => o.value === s0)) $("#l-setor").value = s0; } catch(e){}
+  try { const s0 = localStorage.getItem("estoque-entrada") || localStorage.getItem("estoque-setor"); if (s0 && [...$("#l-setor").options].some(o => o.value === s0)) $("#l-setor").value = s0; } catch(e){}
   $("#l-usuario").value = S.usuario || "";
   $("#l-senha").value = "";
   $("#l-msg").textContent = msg || ""; $("#l-msg").className = msg ? "hint err" : "hint";
@@ -129,6 +129,21 @@ $("#f-login").addEventListener("submit", async ev => {
   try {
     await api("entrar");
     const permitidos = setoresDasPerms(S.perms);
+    try { localStorage.setItem("estoque-entrada", setorEscolhido); } catch(e){}
+    // Entrada pela Administração: abre direto o menu Administração; o estoque fica no setor de sempre
+    if (setorEscolhido === "Administração") {
+      const aba = ABAS_ADM.find(podeAba);
+      if (!aba) {
+        S.senha = ""; S.perms = {};
+        msg.className = "hint err";
+        msg.textContent = `Este login não tem acesso à Administração. Escolha ${permitidos.join(" ou ")}.`;
+        return;
+      }
+      let salvo = ""; try { salvo = localStorage.getItem("estoque-setor") || ""; } catch(e){}
+      S.setor = permitidos.includes(salvo) ? salvo : permitidos[0]; S.setores = permitidos;
+      guardar(); $("#login").hidden = true; renderMe(); setTab(aba); atualizar();
+      return;
+    }
     if (!permitidos.includes(setorEscolhido)) {
       S.senha = ""; S.perms = {};
       msg.className = "hint err";
