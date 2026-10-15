@@ -1832,7 +1832,8 @@ function anguloDoTexto(cinza, w, h, deLado){
 // prepara a foto: até 3000 px, tons de cinza, endireitada (e girada 90° quando pedido)
 async function prepararFoto(file, giro){
   const img = await abrirImagem(file);
-  const s = Math.min(1, 3000 / Math.max(img.naturalWidth, img.naturalHeight));
+  // até 3000 px; foto pequena (ex.: reenviada pelo WhatsApp) é ampliada para as letras ficarem legíveis
+  const s = Math.min(3, 3000 / Math.max(img.naturalWidth, img.naturalHeight));
   let w = Math.round(img.naturalWidth * s), h = Math.round(img.naturalHeight * s);
   const c = document.createElement("canvas"); c.width = w; c.height = h;
   const x = c.getContext("2d", {willReadFrequently: true}); x.drawImage(img, 0, 0, w, h);
@@ -1857,6 +1858,52 @@ async function prepararFoto(file, giro){
   ox.translate(w/2, h/2); ox.rotate(a); ox.drawImage(base, -w/2, -h/2);
   return {canvas:o, deitada:false};
 }
+// linhas do resultado do OCR, com a posição de cada uma
+function linhasDoOCR(data){
+  if (data && Array.isArray(data.lines) && data.lines.length) return data.lines.map(l => ({text: l.text || "", bbox: l.bbox}));
+  const out = [];
+  ((data && data.blocks) || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => out.push({text: l.text || "", bbox: l.bbox}))));
+  return out.filter(l => l.bbox);
+}
+function recorte(canvas, x0, y0, x1, y1, esc){
+  x0 = Math.max(0, Math.round(x0)); y0 = Math.max(0, Math.round(y0));
+  x1 = Math.min(canvas.width, Math.round(x1)); y1 = Math.min(canvas.height, Math.round(y1));
+  const e = esc || 1, c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round((x1 - x0) * e)); c.height = Math.max(1, Math.round((y1 - y0) * e));
+  const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.imageSmoothingQuality = "high";
+  x.drawImage(canvas, x0, y0, x1 - x0, y1 - y0, 0, 0, c.width, c.height);
+  return {canvas:c, x0, y0, e};
+}
+// segunda leitura, quando a página inteira não fechou: nota amassada ou curva embaralha as linhas.
+// Lê a faixa da esquerda (código e descrição) e depois cada linha de produto sozinha, até a conta fechar.
+async function lerLinhasDaFoto(canvas, linhas, rec, prog){
+  const W = canvas.width, H = canvas.height, reg = LeitorNF.regiaoProdutos(linhas, H);
+  const longas = linhas.filter(l => l.text.trim().length >= 10);
+  const xs0 = longas.map(l => l.bbox.x0).sort((a, b) => a - b), xs1 = longas.map(l => l.bbox.x1).sort((a, b) => a - b);
+  const px0 = xs0.length ? xs0[Math.floor(xs0.length * 0.05)] : 0, px1 = xs1.length ? xs1[Math.floor(xs1.length * 0.95)] : W, pw = Math.max(W * 0.5, px1 - px0);
+  prog("lendo a lista de produtos");
+  const fA = recorte(canvas, px0, reg.y0, px0 + pw * 0.55, reg.y1);
+  const A = (await rec(fA.canvas, "6")).linhas.map(l => ({text: l.text, bbox: {x0: l.bbox.x0 + fA.x0, x1: l.bbox.x1 + fA.x0, y0: l.bbox.y0 + fA.y0, y1: l.bbox.y1 + fA.y0}}));
+  const filas = [];
+  A.forEach(l => { const d = LeitorNF.descricaoDaLinha(l.text); if (d && !filas.some(f => Math.abs(f.l.bbox.y0 - l.bbox.y0) < (l.bbox.y1 - l.bbox.y0) * 0.5)) filas.push({l, d}); });
+  const itens = [];
+  for (let i = 0; i < filas.length; i++) {
+    const {l, d} = filas[i], y0 = l.bbox.y0, y1 = l.bbox.y1, h = Math.max(12, y1 - y0);
+    prog(`conferindo produto ${i + 1} de ${filas.length}`);
+    let melhor = null;
+    const considera = n => { if (n && (!melhor || n.p < melhor.p)) melhor = n; };
+    considera(LeitorNF.numerosDaLinha(l.text));
+    linhas.forEach(o => { const c = (o.bbox.y0 + o.bbox.y1) / 2; if (c > y0 - h * 0.6 && c < y1 + h * 0.6) considera(LeitorNF.numerosDaLinha(o.text)); });
+    for (const [a, b, e] of [[0.45, 0.82, 1], [0.50, 0.80, 1], [0.45, 0.82, 1.6], [0.50, 0.80, 1.6]]) {
+      if (melhor && melhor.p <= 1) break;
+      const r = recorte(canvas, px0 + pw * a, y0 - h / 2, px0 + pw * b, y1 + h / 2, e);
+      considera(LeitorNF.numerosDaLinha((await rec(r.canvas, "7")).text));
+    }
+    itens.push(Object.assign({codigo: d.codigo, descricao: d.descricao, unidade: d.unidade || (melhor && melhor.unidade) || "UN"},
+      melhor ? {qtd: melhor.qtd, valorUnit: melhor.valorUnit, valorTotal: melhor.valorTotal, incerto: melhor.p > 1} : {qtd: 1, valorUnit: 0, valorTotal: 0, incerto: true}));
+  }
+  return itens;
+}
 async function lerNotaFoto(fotos, chave){
   S.nfLida = {arquivo:fotos[0], chave, foto:true, lendo:true, prog:""}; renderNfAnexo();
   const vivo = () => S.nfLida && S.nfLida.chave === chave;
@@ -1867,26 +1914,41 @@ async function lerNotaFoto(fotos, chave){
     const T = await carregarOCR();
     let etapa = 0, total = fotos.length;
     worker = await T.createWorker("por", 1, { logger: m => {
-      if (m.status === "recognizing text") prog(Math.round(((etapa + (m.progress||0)) / total) * 100) + "%");
+      if (m.status === "recognizing text" && etapa < total && !/^(lendo|conferindo)/.test(S.nfLida && S.nfLida.prog || "")) prog(Math.round(((etapa + (m.progress||0)) / total) * 100) + "%");
       else if (/load|initializ/i.test(m.status || "") && etapa === 0) prog("abrindo o leitor");
     }});
     await worker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
-    const ler = async canvas => (await worker.recognize(canvas)).data.text || "";
+    let psmAtual = "6";
+    const rec = async (canvas, psm) => {
+      if (psm !== psmAtual) { await worker.setParameters({ tessedit_pageseg_mode: psm }); psmAtual = psm; }
+      const { data } = await worker.recognize(canvas, {}, { text: true, blocks: true });
+      return { text: data.text || "", linhas: linhasDoOCR(data) };
+    };
     const temItens = t => LeitorNF.lerFotoDanfe(t.split("\n")).itens.length > 0;
-    const textos = [];
+    const somaItens = l => l.reduce((t, it) => t + (Number(it.valorTotal) || 0), 0);
+    const textos = [], itens = [];
     for (const f of fotos) {
       if (!vivo()) return;
-      const r = await prepararFoto(f, 0);
-      let t;
-      if (!r.deitada) t = await ler(r.canvas);
+      let r = await prepararFoto(f, 0), p1;
+      if (!r.deitada) p1 = await rec(r.canvas, "6");
       else {
         // nota fotografada deitada: gira para um lado e, se não sair nada, para o outro
-        t = await ler((await prepararFoto(f, 90)).canvas);
-        if (!temItens(t)) { const t2 = await ler((await prepararFoto(f, -90)).canvas); if (temItens(t2)) t = t2; }
+        r = await prepararFoto(f, 90); p1 = await rec(r.canvas, "6");
+        if (!temItens(p1.text)) { const r2 = await prepararFoto(f, -90), p2 = await rec(r2.canvas, "6"); if (temItens(p2.text)) { r = r2; p1 = p2; } }
       }
-      textos.push(t); etapa++;
+      textos.push(p1.text); etapa++;
+      const d1 = LeitorNF.lerFotoDanfe(p1.text.split("\n"));
+      const fecha = d1.itens.length && d1.valorTotal != null && Math.abs(somaItens(d1.itens) - d1.valorTotal) <= 0.05 && !d1.itens.some(it => it.incerto);
+      if (fecha || !p1.linhas.length || !vivo()) { itens.push(...d1.itens); continue; }
+      const d2 = await lerLinhasDaFoto(r.canvas, p1.linhas, rec, prog); prog("");
+      // a segunda leitura manda; o que só a primeira achou entra junto
+      const fechou2 = d1.valorTotal != null && Math.abs(somaItens(d2) - d1.valorTotal) <= 0.05;
+      const sobra = fechou2 ? [] : d1.itens.filter(a => !d2.some(b => (a.codigo && a.codigo === b.codigo) || LeitorNF.parecido(a.descricao, b.descricao) >= 0.5
+        || (Math.abs(a.valorTotal - b.valorTotal) < 0.01 && a.qtd === b.qtd && LeitorNF.parecido(a.descricao, b.descricao) >= 0.2)));
+      itens.push(...d2, ...(d2.length ? sobra : d1.itens));
     }
     dados = LeitorNF.lerFotoDanfe(textos.join("\n\n").split("\n"));
+    dados.itens = itens;
     if (!dados.itens.length) erro = "Não consegui ler os itens nesta foto. Tire outra mais de perto, com a nota reta e bem iluminada, ou lance os itens à mão.";
   } catch(e){
     erro = e && e.message === "leitor" ? "Não deu para carregar o leitor de fotos. Verifique a internet." : e && e.message === "img" ? "Não consegui abrir esta foto. Tente tirar de novo." : "Não consegui ler esta foto. Lance os itens à mão.";

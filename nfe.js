@@ -122,77 +122,131 @@
     if (f.length >= 4) out.push({ v: n / 1000, p: 2 }, { v: n / 10000, p: 2 });
     return out;
   }
-  function linhaDeProdutoFoto(linha) {
-    const limpa = linha.replace(/[\[\]{}()“”"'‘’`~«»_—–=*®©°¢$^]+/g, " ").replace(/\|/g, " | ").replace(/\s+/g, " ").trim();
-    const toks = limpa.split(" ").filter(t => t !== "|");
-    for (let u = 1; u < toks.length - 1; u++) {
-      if (!reUnidade.test(toks[u])) continue;
-      // números depois da unidade (pula lixo curto que o OCR solta no meio)
-      const nums = [];
-      for (let k = u + 1; k < toks.length && nums.length < 5; k++) {
-        const f = digitos(toks[k]);
-        if (f) nums.push(f); else if (toks[k].length > 3) break;
+  const tokensFoto = linha => String(linha || "").replace(/[\[\]{}()“”"'‘’`~«»_—–=*®©°¢$^]+/g, " ").replace(/\|/g, " | ").replace(/\s+/g, " ").trim().split(" ").filter(t => t && t !== "|");
+  // código e descrição: entre o código do produto e o NCM (8 dígitos); fim = posição da unidade (ou fim da linha)
+  function descricaoFoto(toks, fim) {
+    let ini = 0, codigo = "";
+    const c0 = toks.length ? digitos(toks[0].replace(/\.$/, "")) : null;
+    if (c0 && /^\d{3,14}$/.test(c0)) { codigo = c0; ini = 1; }
+    let fimDesc = fim;
+    for (let k = fim - 1; k > ini; k--) {
+      const f = digitos(toks[k].replace(/^[^\dOoSsIl]+/, ""));
+      if (f && /^\d{7,9}$/.test(f.replace(/[.,]/g, ""))) { fimDesc = k; break; }
+    }
+    if (fimDesc === fim) { // sem NCM legível: tira CST/CFOP do fim
+      while (fimDesc - 1 > ini && digitos(toks[fimDesc - 1]) && /^\d{3,4}$/.test(digitos(toks[fimDesc - 1]))) fimDesc--;
+    }
+    const palavras = toks.slice(ini, fimDesc);
+    while (palavras.length && palavras[0].length === 1 && !/\d/.test(palavras[0])) palavras.shift();
+    // descrição em maiúsculas: palavras com minúsculas no fim são lixo do OCR (ex.: "sa0s", "eo")
+    const maiusc = palavras.filter(w => /[A-Z]{2}/.test(w)).length >= Math.max(1, palavras.length / 2);
+    while (palavras.length > 1) {
+      const w = palavras[palavras.length - 1];
+      if ((w.length === 1 && !/\d/.test(w)) || (maiusc && /[a-z]/.test(w)) || /^[^A-Za-z0-9]+$/.test(w)) palavras.pop(); else break;
+    }
+    // borda da tabela lida como "I" grudado na primeira palavra ("ICARTUCHO")
+    if (palavras.length && /^[Il|][BCFHJKPQVWXYZ][A-Z]{2,}/.test(palavras[0])) palavras[0] = palavras[0].slice(1);
+    const descricao = limparDescricao(palavras.join(" ").replace(/^[^A-Za-z0-9À-ú]+/, ""));
+    return /[A-Za-zÀ-ú]{3}/.test(descricao) ? { codigo, descricao } : null;
+  }
+  // quantidade, unitário e total a partir dos números lidos (p = quanto foi preciso "adivinhar")
+  function numerosFoto(nums, janelas) {
+    let melhor = null;
+    for (let a = 0; a + 2 < nums.length && a < janelas; a++) {
+      candidatos(nums[a], true).forEach(q => candidatos(nums[a + 1]).forEach(vu => candidatos(nums[a + 2]).forEach(vt => {
+        if (q.v <= 0 || vu.v <= 0 || vt.v <= 0) return;
+        if (Math.abs(q.v * vu.v - vt.v) > 0.006 + q.v * 0.005) return;
+        const p = q.p + vu.p + vt.p + a * 0.5;
+        if (!melhor || p < melhor.p) melhor = { p, qtd: q.v, valorUnit: vu.v, valorTotal: vt.v };
+      })));
+    }
+    if (!melhor) {
+      // quantidade ilegível: unitário e total seguidos, e a quantidade sai da divisão
+      for (let a = 0; a + 1 < nums.length && a < janelas + 1; a++) {
+        candidatos(nums[a]).forEach(vu => candidatos(nums[a + 1]).forEach(vt => {
+          if (vu.v <= 0 || vt.v <= 0) return;
+          const q = vt.v / vu.v, r = Math.round(q);
+          if (r < 1 || r > 999 || Math.abs(q - r) > 0.001) return;
+          const p = 3 + vu.p + vt.p + a * 0.5;
+          if (!melhor || p < melhor.p) melhor = { p, qtd: r, valorUnit: vu.v, valorTotal: vt.v };
+        }));
       }
-      if (nums.length < 2) continue;
-      // descrição: entre o código e o NCM (8 dígitos)
-      let ini = 0, codigo = "";
-      const c0 = digitos(toks[0].replace(/\.$/, ""));
-      if (c0 && /^\d{3,14}$/.test(c0)) { codigo = c0; ini = 1; }
-      let fimDesc = u;
-      for (let k = u - 1; k > ini; k--) {
-        const f = digitos(toks[k].replace(/^[^\dOoSsIl]+/, ""));
-        if (f && /^\d{7,9}$/.test(f.replace(/[.,]/g, ""))) { fimDesc = k; break; }
-      }
-      if (fimDesc === u) { // sem NCM legível: tira CST/CFOP do fim
-        while (fimDesc - 1 > ini && digitos(toks[fimDesc - 1]) && /^\d{3,4}$/.test(digitos(toks[fimDesc - 1]))) fimDesc--;
-      }
-      const palavras = toks.slice(ini, fimDesc);
-      while (palavras.length && palavras[0].length === 1 && !/\d/.test(palavras[0])) palavras.shift();
-      // descrição em maiúsculas: palavras com minúsculas no fim são lixo do OCR (ex.: "sa0s", "eo")
-      const maiusc = palavras.filter(w => /[A-Z]{2}/.test(w)).length >= Math.max(1, palavras.length / 2);
-      while (palavras.length > 1) {
-        const w = palavras[palavras.length - 1];
-        if ((w.length === 1 && !/\d/.test(w)) || (maiusc && /[a-z]/.test(w)) || /^[^A-Za-z0-9]+$/.test(w)) palavras.pop(); else break;
-      }
-      // borda da tabela lida como "I" grudado na primeira palavra ("ICARTUCHO")
-      if (palavras.length && /^[Il|][BCFHJKPQVWXYZ][A-Z]{2,}/.test(palavras[0])) palavras[0] = palavras[0].slice(1);
-      const descricao = limparDescricao(palavras.join(" ").replace(/^[^A-Za-z0-9À-ú]+/, ""));
-      if (!/[A-Za-zÀ-ú]{3}/.test(descricao)) continue;
-      // procura quantidade × unitário = total entre os primeiros números
-      let melhor = null;
-      for (let a = 0; a + 2 < nums.length && a < 2; a++) {
-        candidatos(nums[a], true).forEach(q => candidatos(nums[a + 1]).forEach(vu => candidatos(nums[a + 2]).forEach(vt => {
-          if (q.v <= 0 || vu.v <= 0 || vt.v <= 0) return;
-          if (Math.abs(q.v * vu.v - vt.v) > 0.011 + vt.v * 0.0005) return;
-          const p = q.p + vu.p + vt.p + a;
-          if (!melhor || p < melhor.p) melhor = { p, qtd: q.v, valorUnit: vu.v, valorTotal: vt.v };
-        })));
-      }
-      if (!melhor) {
-        // quantidade ilegível: unitário e total seguidos, e a quantidade sai da divisão
-        for (let a = 0; a + 1 < nums.length && a < 3; a++) {
-          candidatos(nums[a]).forEach(vu => candidatos(nums[a + 1]).forEach(vt => {
-            if (vu.v <= 0 || vt.v <= 0) return;
-            const q = vt.v / vu.v, r = Math.round(q);
-            if (r < 1 || r > 999 || Math.abs(q - r) > 0.001) return;
-            const p = 3 + vu.p + vt.p + a;
-            if (!melhor || p < melhor.p) melhor = { p, qtd: r, valorUnit: vu.v, valorTotal: vt.v };
-          }));
+    }
+    if (!melhor) {
+      // unitário ilegível: quantidade inteira antes do total com centavos
+      const k = nums.findIndex(f => /[.,]\d{2}$/.test(f) && candidatos(f)[0].v > 0);
+      if (k > 0) {
+        const vt = candidatos(nums[k])[0].v;
+        for (let j = k - 1; j >= 0 && j >= k - 3; j--) {
+          if (!/^\d{1,3}$/.test(nums[j]) || Number(nums[j]) < 1) continue;
+          const vu = vt / Number(nums[j]);
+          if (Math.abs(vu * 100 - Math.round(vu * 100)) < 1e-6) { melhor = { p: 5, qtd: Number(nums[j]), valorUnit: vu, valorTotal: vt }; break; }
         }
       }
+    }
+    return melhor;
+  }
+  function numerosDeToks(toks, desde) {
+    const nums = [];
+    for (let k = desde; k < toks.length && nums.length < 8; k++) {
+      const f = digitos(toks[k]);
+      if (f) nums.push(f); else if (toks[k].length > 3) break;
+    }
+    return nums;
+  }
+  // números de uma linha de produto recortada da foto (com ou sem a unidade legível)
+  function numerosDaLinha(texto) {
+    const toks = tokensFoto(texto);
+    let u = -1; toks.forEach((t, k) => { if (reUnidade.test(t)) u = k; });
+    const nums = u >= 0 ? numerosDeToks(toks, u + 1) : toks.map(digitos).filter(f => f && !/^\d{5,}$/.test(f)).slice(0, 8);
+    const m = nums.length >= 2 ? numerosFoto(nums, u >= 0 ? 2 : 6) : null;
+    // sem a unidade como âncora, só vale a conta exata (quantidade × unitário = total)
+    if (!m || (u < 0 && m.p > 1)) return null;
+    return Object.assign(m, { unidade: u >= 0 ? toks[u].toUpperCase() : "" });
+  }
+  // linha da faixa esquerda: código + descrição (+ unidade, se couber)
+  function descricaoDaLinha(texto) {
+    if (/CARGA TRIBUT|FONTE DA|FCP|RETIDO/i.test(texto)) return null;
+    const toks = tokensFoto(texto);
+    while (toks.length && !/[A-Za-z0-9]/.test(toks[0])) toks.shift(); // lixo antes do código (", 65352")
+    // a unidade vem logo depois do CFOP/CST (números); "BR" no meio da descrição não conta
+    let u = toks.length; toks.forEach((t, k) => { if (k > 1 && u === toks.length && reUnidade.test(t) && /^\d{3,9}$/.test(digitos(toks[k - 1]) || "")) u = k; });
+    const d = descricaoFoto(toks, u);
+    return d && d.codigo ? Object.assign(d, { unidade: u < toks.length ? toks[u].toUpperCase() : "" }) : null;
+  }
+  function linhaDeProdutoFoto(linha) {
+    const toks = tokensFoto(linha);
+    for (let u = 1; u < toks.length - 1; u++) {
+      if (!reUnidade.test(toks[u])) continue;
+      const nums = numerosDeToks(toks, u + 1).slice(0, 5);
+      if (nums.length < 2) continue;
+      const d = descricaoFoto(toks, u);
+      if (!d) continue;
+      const melhor = numerosFoto(nums, 2);
       let item;
-      if (melhor) item = { qtd: melhor.qtd, valorUnit: melhor.valorUnit, valorTotal: melhor.valorTotal, incerto: melhor.p > 1 };
+      if (melhor) item = { qtd: melhor.qtd, valorUnit: melhor.valorUnit, valorTotal: melhor.valorTotal, incerto: melhor.p > 1, p: melhor.p };
       else {
         // não fechou a conta: aproveita o que der e marca para conferir
         const dec = nums.map(f => candidatos(f)[0]).map((c, k) => /[.,]\d{2}$/.test(nums[k]) ? c.v : null);
         const q = /^\d{1,4}$/.test(nums[0]) ? Number(nums[0]) : (dec[0] || 1);
-        const vt = dec[2] != null ? dec[2] : dec[1] != null && dec[1] > 0 ? null : null;
+        const vt = dec[2] != null ? dec[2] : null;
         const vu = dec[1] != null ? dec[1] : vt != null && q ? vt / q : 0;
-        item = { qtd: q || 1, valorUnit: vu || 0, valorTotal: vt != null ? vt : (q || 1) * (vu || 0), incerto: true };
+        item = { qtd: q || 1, valorUnit: vu || 0, valorTotal: vt != null ? vt : (q || 1) * (vu || 0), incerto: true, p: 9 };
       }
-      return Object.assign({ codigo, descricao, unidade: toks[u].toUpperCase() }, item);
+      return Object.assign({ codigo: d.codigo, descricao: d.descricao, unidade: toks[u].toUpperCase() }, item);
     }
     return null;
+  }
+  // faixa da tabela de produtos na foto, pelas linhas (com posição) da leitura da página inteira
+  function regiaoProdutos(linhasBox, altura) {
+    const alt = linhasBox.map(l => l.bbox.y1 - l.bbox.y0).sort((a, b) => a - b)[Math.floor(linhasBox.length / 2)] || 30;
+    const marcos = linhasBox.filter(l => /CARGA TRIBUT|FONTE DA CARGA/i.test(l.text) || linhaDeProdutoFoto(l.text) || descricaoDaLinha(l.text) && /\d{7,8}/.test(l.text));
+    const cab = linhasBox.filter(l => /DADOS DOS PRODUTOS|DESCRI[CÇ][AÃ]O DOS PRODUTOS|C[OÓ]D\.? ?PRODUTO/i.test(l.text));
+    let y0 = marcos.length ? Math.min(...marcos.map(l => l.bbox.y0)) - alt * 1.5 : cab.length ? cab[0].bbox.y1 : altura * 0.35;
+    if (cab.length && cab[cab.length - 1].bbox.y1 < y0 + alt * 3) y0 = Math.min(y0, cab[cab.length - 1].bbox.y1);
+    const fimL = linhasBox.filter(l => l.bbox.y0 > y0 + alt && /ISSQN|DADOS ADICIONAIS|INFORMA[CÇ][OÕ]ES COMPLEMENTARES/i.test(l.text));
+    const y1 = fimL.length ? Math.min(...fimL.map(l => l.bbox.y0)) : altura;
+    return { y0: Math.max(0, Math.round(y0)), y1: Math.round(y1), alt };
   }
   function lerFotoDanfe(linhas) {
     linhas = linhas.map(l => String(l || "").replace(/\s+/g, " ").trim());
@@ -251,5 +305,5 @@
       .filter(x => x.nota > 0.2).sort((x, y) => (y.nota - x.nota) || (y.cobre - x.cobre)).slice(0, n || 5);
   }
 
-  raiz.LeitorNF = { montarLinhas, lerDanfe, lerFotoDanfe, sugerir, parecido, cobertura };
+  raiz.LeitorNF = { montarLinhas, lerDanfe, lerFotoDanfe, numerosDaLinha, descricaoDaLinha, regiaoProdutos, sugerir, parecido, cobertura };
 })(typeof window !== "undefined" ? window : globalThis);
