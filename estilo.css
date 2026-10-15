@@ -395,8 +395,7 @@ td.mono{white-space:nowrap}
 .setor-btns button{border:0;background:none;padding:6px 16px;border-radius:6px;font-family:var(--f-display);font-weight:600;font-size:1rem;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);cursor:pointer}
 .setor-btns button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
 .setor-nome{color:var(--accent-ink)}
-.me-setor{font-size:.8rem;color:var(--muted);margin-top:2px}
-.me-setor b{color:var(--accent-ink)}
+
 .locais-rapidos{margin-top:6px;gap:6px;align-items:center}
 .locais-rapidos .chip{padding:4px 10px;font-size:.8rem}
 .imp-hist{background:var(--accent-soft);border-radius:8px;padding:10px 12px;margin:0 0 10px}
@@ -529,3 +528,40 @@ tr.ac-falha td{background:color-mix(in srgb,var(--crit-bg) 60%,var(--surface))}
 .seg2 span{font-size:.78rem;color:var(--muted);grid-column:2}
 .pd-execs{margin:4px 0 0;padding-left:18px;font-size:.86rem;display:grid;gap:2px}
 @media (max-width:560px){.seg2{grid-template-columns:minmax(0,1fr)}}
+
+/* Cabeçalho: seletor de setor e usuário */
+.me{display:grid;justify-items:end;gap:6px}
+.me-box{display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:flex-end}
+.setor-sel{position:relative;display:grid;gap:3px}
+.setor-lbl{font-size:.66rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.setor-btn{--c:var(--s1);--cb:color-mix(in srgb,var(--s1) 12%,var(--surface));display:inline-flex;align-items:center;gap:8px;padding:7px 12px 7px 10px;border-radius:8px;border:1.5px solid color-mix(in srgb,var(--c) 45%,var(--line));background:var(--cb);color:var(--fg);font-family:var(--f-display);font-weight:700;font-size:1.02rem;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;min-height:40px}
+.setor-btn:hover:not(:disabled){border-color:var(--c)}
+.setor-btn:disabled{cursor:default;opacity:1}
+.setor-btn .ico{width:18px;height:18px;fill:none;stroke:var(--c);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.setor-btn .car{font-size:.75em;color:var(--muted);transition:transform .15s}
+.setor-btn[aria-expanded="true"] .car{transform:rotate(180deg)}
+.setor-btn.lim,.setor-menu .lim{--c:var(--teal);--cb:color-mix(in srgb,var(--teal) 12%,var(--surface))}
+.setor-btn.adm,.setor-menu .adm{--c:var(--s2);--cb:color-mix(in srgb,var(--s2) 12%,var(--surface))}
+.setor-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:40;min-width:270px;max-width:calc(100vw - 32px);background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:6px;display:grid;gap:2px}
+.setor-menu .mh{font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:6px 10px 4px}
+.setor-menu button{--c:var(--s1);display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;text-align:left;background:none;border:0;border-radius:7px;padding:9px 10px;cursor:pointer;color:var(--fg)}
+.setor-menu button:hover,.setor-menu button:focus-visible{background:var(--surface-2)}
+.setor-menu button[aria-checked="true"]{background:color-mix(in srgb,var(--c) 10%,var(--surface))}
+.setor-menu .ico{width:20px;height:20px;fill:none;stroke:var(--c);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.setor-menu .t{display:grid;gap:1px}
+.setor-menu .t b{font-size:.92rem}
+.setor-menu .t span{font-size:.78rem;color:var(--muted)}
+.setor-menu .ok{color:var(--c);font-weight:700}
+.me-user{display:flex;align-items:center;gap:10px;padding-left:16px;border-left:1px solid var(--line)}
+.avatar{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent-ink);font-weight:700;font-size:.85rem;letter-spacing:.02em;flex:none}
+.me-dados{display:grid;gap:3px;text-align:left}
+.me .who{font-weight:600;font-size:.92rem;line-height:1.15;white-space:nowrap}
+.me-linha{display:flex;align-items:center;gap:8px}
+.me .sync{text-align:right}
+@media (max-width:640px){
+  .me{justify-items:stretch;width:100%}
+  .me-box{justify-content:space-between;width:100%}
+  .me-user{border-left:0;padding-left:0}
+  .setor-menu{right:auto;left:0}
+  .me .sync{text-align:left}
+}

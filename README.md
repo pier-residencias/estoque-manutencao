@@ -61,7 +61,7 @@ Na tela de entrada, o campo **Setor** tem três opções, e cada uma mostra só 
 - **Limpeza**: Painel, Registrar (só saída e entrada), Itens e Histórico, com os materiais da limpeza.
 - **Administração**: nenhuma aba do estoque, só o menu suspenso **Administração ▾** (no celular, **Adm. ▾**) no fim da barra.
 
-Quem tem acesso a mais de uma opção troca pelo cabeçalho, ao lado de "Setor". A opção Administração só aceita perfis com pelo menos uma permissão do grupo **Administração** na aba **Perfis**; o perfil Administração tem todas. A escolha fica lembrada no aparelho. Para pôr uma tela nova no menu: um botão com `data-adm-tab` em `#adm-menu` (index.html), a aba em `ABAS_PERM` e `ABAS_ADM` (app.js) e a permissão em `PERMISSOES`, grupo `'Administração'` (Codigo.gs).
+Quem tem acesso a mais de uma opção troca pelo botão **Setor** no cabeçalho, que abre um menu com os setores disponíveis (cada um com ícone, cor e descrição); para quem só tem um setor, o botão apenas mostra qual é. A opção Administração só aceita perfis com pelo menos uma permissão do grupo **Administração** na aba **Perfis**; o perfil Administração tem todas. A escolha fica lembrada no aparelho. Para pôr uma tela nova no menu: um botão com `data-adm-tab` em `#adm-menu` (index.html), a aba em `ABAS_PERM` e `ABAS_ADM` (app.js) e a permissão em `PERMISSOES`, grupo `'Administração'` (Codigo.gs).
 
 ### Controle de pendências
 

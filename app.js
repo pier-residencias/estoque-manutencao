@@ -52,7 +52,7 @@ const ehSindico = () => norm(S.perfil).includes("sindico");
 const setoresReais = () => SETORES_PERM.filter(x => can(x[1])).map(x => x[0]);
 const podeAdm = () => ABAS_ADM.some(t => (ABAS_PERM[t]||[]).some(can));
 const podeAba = t => (ABAS_PERM[t]||[]).some(can) && abaNoModo(t);
-const primeiraAba = () => Object.keys(ABAS_PERM).find(podeAba) || "painel";
+const primeiraAba = () => (S.adm ? ABAS_ADM.find(podeAba) : Object.keys(ABAS_PERM).find(podeAba)) || "painel";
 const movsDoMes = ym => S.movs.filter(m => String(m.data).slice(0,7) === ym && doSetor(m));
 
 // descrição curta do aparelho, para o histórico de acessos
@@ -185,8 +185,15 @@ $("#f-login").addEventListener("submit", async ev => {
   finally { btn.disabled = false; }
 });
 
+function iniciais(n){ const p = String(n||"").replace(/\(.*?\)/g,"").trim().split(/\s+/).filter(Boolean); return ((p[0]||"?")[0] + (p.length > 1 ? p[p.length-1][0] : "")).toUpperCase(); }
 function renderMe(){
-  $("#me").innerHTML = `<div style="text-align:right"><div class="who">${esc(S.nome)}</div><span class="role ${can("usuarios")?"adm":""}">${esc(S.perfil||"")}</span> <button class="sair" id="b-sair" type="button">Sair</button><div class="me-setor" id="me-setor"></div><div class="sync" id="sync"></div></div>`;
+  $("#me").innerHTML = `<div class="me-box">
+      <div class="setor-sel" id="me-setor"></div>
+      <div class="me-user"><span class="avatar" aria-hidden="true">${esc(iniciais(S.nome))}</span>
+        <div class="me-dados"><div class="who">${esc(S.nome)}</div><div class="me-linha"><span class="role ${can("usuarios")?"adm":""}">${esc(S.perfil||"")}</span><button class="sair" id="b-sair" type="button">Sair</button></div></div>
+      </div>
+    </div>
+    <div class="sync" id="sync"></div>`;
   renderSetorSel();
   $("#b-sair").onclick = () => sair("");
   renderSync();
@@ -271,13 +278,26 @@ function proxCodigo(){
 }
 // seletor de setor (Manutenção | Limpeza): aparece para quem vê mais de um
 function modosDisponiveis(){ return S.setores.filter(x => setoresReais().includes(x)).concat(TEM_ADM && podeAdm() ? ["Administração"] : []); }
+// ícones e descrições dos setores no seletor do cabeçalho
+const SETOR_INFO = {
+  "Manutenção": {cls:"man", desc:"Estoque, OS e demandas", ico:'<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3.6 17.4a1.9 1.9 0 0 0 2.7 2.7l5.7-5.7a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.3-.3-2.4z"/>'},
+  "Limpeza": {cls:"lim", desc:"Materiais de limpeza", ico:'<path d="M12 3.5c3 3.6 5.5 6.7 5.5 9.7a5.5 5.5 0 0 1-11 0c0-3 2.5-6.1 5.5-9.7z"/>'},
+  "Administração": {cls:"adm", desc:"Pendências, equipe e acessos", ico:'<rect x="3.5" y="7" width="17" height="12.5" rx="2"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3.5 12.5h17"/>'}
+};
+const icoSetor = s => `<svg viewBox="0 0 24 24" aria-hidden="true" class="ico">${(SETOR_INFO[s]||SETOR_INFO["Manutenção"]).ico}</svg>`;
 function renderSetorSel(){
   const el = $("#me-setor");
   if (el) {
-    const outros = modosDisponiveis().filter(x => x !== modo());
-    el.innerHTML = `Setor: <b>${esc(modo())}</b>` + (outros.length === 1
-      ? ` <button class="sair" type="button" data-setor="${esc(outros[0])}" title="Mudar para ${esc(outros[0])}">trocar</button>`
-      : outros.length ? ` · trocar para ${outros.map(x => `<button class="sair" type="button" data-setor="${esc(x)}">${esc(x)}</button>`).join(" ")}` : "");
+    const atual = modo(), modos = modosDisponiveis(), info = SETOR_INFO[atual] || SETOR_INFO["Manutenção"];
+    const varios = modos.filter(x => x !== atual).length > 0;
+    const descAdm = !ehSindico() && (can("usuarios") || can("acessos")) ? SETOR_INFO["Administração"].desc : "Pendências";
+    el.innerHTML = `<span class="setor-lbl" id="setor-lbl">Setor</span>
+      <button type="button" class="setor-btn ${info.cls}" id="setor-btn" aria-labelledby="setor-lbl setor-btn" ${varios ? `aria-haspopup="true" aria-expanded="false" aria-controls="setor-menu"` : "disabled"}>
+        ${icoSetor(atual)}<span>${esc(atual)}</span>${varios ? `<span class="car" aria-hidden="true">▾</span>` : ""}</button>
+      ${varios ? `<div class="setor-menu" id="setor-menu" role="menu" aria-label="Trocar de setor" hidden>
+        <div class="mh">Trocar de setor</div>
+        ${modos.map(x => { const i = SETOR_INFO[x] || SETOR_INFO["Manutenção"]; return `<button type="button" role="menuitemradio" aria-checked="${x===atual}" class="${i.cls}" data-setor="${esc(x)}">${icoSetor(x)}<span class="t"><b>${esc(x)}</b><span>${esc(x==="Administração" ? descAdm : i.desc)}</span></span>${x===atual ? `<span class="ok" aria-hidden="true">✓</span>` : ""}</button>`; }).join("")}
+      </div>` : ""}`;
   }
   $$(".setor-nome").forEach(n => n.textContent = S.setores.length > 1 ? " · " + S.setor : "");
 }
@@ -296,7 +316,25 @@ function mudarSetor(x){
   S.picked = null; S.iStatus = ""; syncChips("#i-status","s",S.iStatus); $("#i-cat").value = "";
   renderSetorSel(); renderAll(); renderSugestoes();
 }
-document.addEventListener("click", e => { const b = e.target.closest("#me-setor [data-setor]"); if (b) { mudarModo(b.dataset.setor); toast(`Setor ${modo()}.`); } });
+function abrirMenuSetor(abrir){
+  const m = $("#setor-menu"), b = $("#setor-btn"); if (!m || !b) return;
+  m.hidden = !abrir; b.setAttribute("aria-expanded", abrir ? "true" : "false");
+  if (abrir) { const f = m.querySelector('[aria-checked="false"]') || m.querySelector("button"); if (f) f.focus(); }
+}
+document.addEventListener("click", e => {
+  const item = e.target.closest("#me-setor [data-setor]");
+  if (item) { abrirMenuSetor(false); if (item.dataset.setor !== modo()) { mudarModo(item.dataset.setor); toast(`Setor ${modo()}.`); } return; }
+  if (e.target.closest("#setor-btn")) { abrirMenuSetor($("#setor-menu") && $("#setor-menu").hidden); return; }
+  if (!e.target.closest("#setor-menu")) abrirMenuSetor(false);
+});
+document.addEventListener("keydown", e => {
+  const m = $("#setor-menu"); if (!m || m.hidden) return;
+  const itens = $$("#setor-menu button"), i = itens.indexOf(document.activeElement);
+  if (e.key === "ArrowDown") { e.preventDefault(); itens[(i+1) % itens.length].focus(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); itens[(i-1+itens.length) % itens.length].focus(); }
+  else if (e.key === "Escape") { abrirMenuSetor(false); $("#setor-btn").focus(); }
+  else if (e.key === "Tab") abrirMenuSetor(false);
+});
 const ordMov = (a,b) => String(b.data||"").localeCompare(String(a.data||"")) || String(b.criadoEm||"").localeCompare(String(a.criadoEm||""));
 const sinal = m => (Number(m.delta)>0?"+":Number(m.delta)<0?"−":"");
 
