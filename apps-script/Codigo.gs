@@ -103,9 +103,19 @@ const ABAS = {
       ['responsavel', 'Responsável'], ['prazo', 'Prazo'], ['obs', 'Observação'], ['ordem', 'Ordem'],
       ['atualizadoEm', 'Atualizado em'], ['atualizadoPor', 'Atualizado por'],
       ['criadaPor', 'Incluída por'], ['origem', 'Origem'], ['vistaEm', 'Vista em'], ['vistaPor', 'Vista por'],
-      ['criticidade', 'Criticidade']
+      ['criticidade', 'Criticidade'], ['tipo', 'Tipo'], ['frequencia', 'Frequência'], ['ultimaVez', 'Última execução'],
+      ['execucoes', 'Execuções'], ['pai', 'Subitem de']
     ],
     num: ['ordem']
+  },
+  acessos: {
+    nome: 'Acessos',
+    criar: true,
+    cols: [
+      ['id', 'ID'], ['quando', 'Data e hora'], ['usuario', 'Usuário'], ['nome', 'Nome'], ['perfil', 'Perfil'],
+      ['entrada', 'Entrou por'], ['aparelho', 'Aparelho'], ['tipo', 'Tipo']
+    ],
+    num: []
   }
 };
 
@@ -175,7 +185,7 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
-const VERSAO = '2026-10-15 criticidade';
+const VERSAO = '2026-10-15 acessos e subitens';
 
 function doGet() {
   return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
@@ -187,13 +197,17 @@ function doPost(e) {
   catch (err) { return json({ ok: false, erro: 'Pedido inválido.' }); }
   try {
     const conta = autenticar(req.usuario, req.senha);
-    if (!conta) return json({ ok: false, codigo: 'senha', erro: 'Usuário ou senha incorretos.' });
+    if (!conta) {
+      if (req.acao === 'entrar' && req.registro && req.registro.motivo === 'login') registrarAcesso(null, req.usuario, req.registro);
+      return json({ ok: false, codigo: 'senha', erro: 'Usuário ou senha incorretos.' });
+    }
     const nome = conta.nome;
     const base = { ok: true, nome, perfil: conta.perfil, perms: conta.perms };
     const pode = p => { if (!conta.perms[p]) throw falha('Seu perfil não tem permissão para isso.'); };
     const algum = ps => { if (!ps.some(p => conta.perms[p])) throw falha('Seu perfil não tem permissão para isso.'); };
     if (req.acao === 'entrar' || req.acao === 'dados') gerarPreventivasSePreciso();
-    if (req.acao === 'entrar') return json(base);
+    if (req.acao === 'entrar') { if (req.registro) registrarAcesso(conta, conta.usuario, req.registro); return json(base); }
+    if (req.acao === 'acessos') { pode('acessos'); return json(Object.assign(base, { acessos: lerAcessos(req.dias) })); }
     if (req.acao === 'dados') return json(Object.assign(base, { dados: dados(req.meses, conta) }));
     if (req.acao === 'relatorio') { pode('dashboard'); return json(Object.assign(base, { relatorio: relatorio(req.de, req.ate, conta) })); }
     if (req.acao === 'usuarios') { pode('usuarios'); return json(Object.assign(base, { equipe: equipe() })); }
@@ -587,7 +601,8 @@ const PERMISSOES = [
   ['historico_estornar', 'Estornar', 'Estornar lançamentos', 'Controle'],
   ['exportar', 'Exportar', 'Exportar planilhas', 'Controle'],
   ['usuarios', 'Usuários', 'Gerenciar usuários e permissões', 'Controle'],
-  ['pendencias', 'Pendências', 'Ver e atualizar o controle de pendências do síndico (menu Administração)', 'Administração']
+  ['pendencias', 'Pendências', 'Ver e atualizar o controle de pendências do síndico (menu Administração)', 'Administração'],
+  ['acessos', 'Histórico de acessos', 'Ver quem entrou no sistema, quando e de qual aparelho (menu Administração)', 'Administração']
 ];
 const PADRAO_MANUTENCAO = ['painel', 'itens_ver', 'historico_ver', 'registrar_saida', 'registrar_entrada',
   'registrar_troca', 'registrar_emprestimo', 'devolver', 'itens_cadastrar', 'os_ver', 'os_abrir', 'os_atender', 'dem_ver', 'dem_executar',
@@ -1645,6 +1660,7 @@ function autorizar() {
   tabela('dem');
   tabela('prev');
   pendLista();
+  tabela('acessos');
   abaPerfis();
   tabela('itens');
   const limpeza = garantirLimpeza() + garantirSindico();
@@ -1751,7 +1767,8 @@ function pendLista() {
   return lista
     .map(p => ({ id: p.id, secao: p.secao, numero: p.numero, titulo: p.titulo, status: p.status, responsavel: p.responsavel,
       prazo: p.prazo, obs: p.obs, ordem: p.ordem, atualizadoEm: p.atualizadoEm, atualizadoPor: p.atualizadoPor,
-      criadaPor: p.criadaPor, origem: p.origem, vistaEm: p.vistaEm, vistaPor: p.vistaPor, criticidade: p.criticidade }))
+      criadaPor: p.criadaPor, origem: p.origem, vistaEm: p.vistaEm, vistaPor: p.vistaPor, criticidade: p.criticidade,
+      tipo: p.tipo, frequencia: p.frequencia, ultimaVez: p.ultimaVez, execucoes: p.execucoes, pai: p.pai }))
     .sort((a, b) => (Number(a.ordem) || 1e9) - (Number(b.ordem) || 1e9));
 }
 
@@ -1768,7 +1785,7 @@ function pendSemear(t) {
       conta[x[0]] = (conta[x[0]] || 0) + 1;
       const o = { id: 'pd' + ('00' + (i + 1)).slice(-3), secao: PEND_SECOES[x[0]], numero: x[1], titulo: x[2], status: x[3],
         responsavel: '', prazo: '', obs: x[4], ordem: x[0] * 1000 + conta[x[0]], atualizadoEm: quando, atualizadoPor: 'Relatório de 14/10',
-        criadaPor: '', origem: '', vistaEm: '', vistaPor: '', criticidade: '' };
+        criadaPor: '', origem: '', vistaEm: '', vistaPor: '', criticidade: '', tipo: '', frequencia: '', ultimaVez: '', execucoes: '', pai: '' };
       const r = new Array(t.ncol).fill('');
       t.def.cols.forEach(([k]) => { r[t.idx[k]] = k === 'ordem' ? o[k] : (o[k] === undefined || o[k] === null ? '' : String(o[k])); });
       return r;
@@ -1783,6 +1800,26 @@ function pendSemear(t) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// frequências das tarefas constantes: [nome, quantidade, unidade]
+const PEND_FREQ = [['Diária', 1, 'dias'], ['Semanal', 7, 'dias'], ['Quinzenal', 15, 'dias'], ['Mensal', 1, 'meses'],
+  ['Bimestral', 2, 'meses'], ['Trimestral', 3, 'meses'], ['Semestral', 6, 'meses'], ['Anual', 12, 'meses']];
+
+function proximaData(base, frequencia) {
+  const f = PEND_FREQ.find(x => x[0] === frequencia) || PEND_FREQ[3];
+  if (f[2] === 'dias') return somarDias(base, f[1]);
+  const p = String(base).split('-').map(Number);
+  const alvo = new Date(Date.UTC(p[0], p[1] - 1 + f[1], 1));
+  const ultimoDia = new Date(Date.UTC(alvo.getUTCFullYear(), alvo.getUTCMonth() + 1, 0)).getUTCDate();
+  alvo.setUTCDate(Math.min(p[2], ultimoDia));
+  return utcParaIso(alvo.getTime());
+}
+
+// subitens: os marcados com "Subitem de" e os numerados como N.k na mesma seção
+function filhosDe(todas, pai) {
+  const pref = pai.numero ? String(pai.numero) + '.' : null;
+  return todas.filter(p => p.id !== pai.id && (p.pai === pai.id || (pref && p.secao === pai.secao && !p.pai && String(p.numero).indexOf(pref) === 0)));
 }
 
 function pendSalvar(v, conta) {
@@ -1801,30 +1838,136 @@ function pendSalvar(v, conta) {
     gravar(t, { vistaEm: obj.vistaEm, vistaPor: obj.vistaPor }, atual._row);
     return 'Ciente registrado.';
   }
+  // tarefa constante: registra a execução e agenda a próxima
+  if (atual && v.feito) {
+    if (atual.tipo !== 'Constante') throw falha('Só tarefas constantes têm execução registrada.');
+    const dia = /^\d{4}-\d{2}-\d{2}$/.test(String(v.data || '')) ? String(v.data) : hoje();
+    obj.ultimaVez = dia;
+    obj.prazo = proximaData(dia, atual.frequencia);
+    obj.execucoes = [dia + ' ' + conta.nome].concat(String(atual.execucoes || '').split(';').map(s => s.trim()).filter(Boolean)).slice(0, 30).join('; ');
+    gravar(t, obj, atual._row);
+    return 'Feito em ' + dia.split('-').reverse().slice(0, 2).join('/') + '. Próxima: ' + obj.prazo.split('-').reverse().slice(0, 2).join('/') + '.';
+  }
   if ('titulo' in v) { obj.titulo = texto(v.titulo, 300); if (!obj.titulo) throw falha('Descreva a pendência.'); }
   if ('status' in v) { if (PEND_STATUS.indexOf(v.status) < 0) throw falha('Situação inválida.'); obj.status = v.status; }
   if ('responsavel' in v) obj.responsavel = texto(v.responsavel, 60);
   if ('criticidade' in v) { if (v.criticidade && PEND_CRITICIDADE.indexOf(v.criticidade) < 0) throw falha('Criticidade inválida.'); obj.criticidade = v.criticidade || ''; }
   if ('prazo' in v) obj.prazo = /^\d{4}-\d{2}-\d{2}$/.test(String(v.prazo || '')) ? String(v.prazo) : '';
   if ('obs' in v) obj.obs = texto(v.obs, 1000);
+  if ('tipo' in v) obj.tipo = v.tipo === 'Constante' ? 'Constante' : '';
+  if ('frequencia' in v) { if (v.frequencia && !PEND_FREQ.some(f => f[0] === v.frequencia)) throw falha('Frequência inválida.'); obj.frequencia = v.frequencia || ''; }
+  const tipoFinal = 'tipo' in obj ? obj.tipo : (atual ? atual.tipo : '');
+  if (tipoFinal === 'Constante') {
+    const freqFinal = obj.frequencia || (!('frequencia' in obj) && atual && atual.frequencia) || 'Mensal';
+    if (freqFinal !== (atual && atual.frequencia)) obj.frequencia = freqFinal;
+    const prazoFinal = 'prazo' in obj ? obj.prazo : (atual ? atual.prazo : '');
+    if (!prazoFinal) obj.prazo = proximaData(hoje(), freqFinal);
+    if (!atual || atual.status === 'Concluído' || obj.status === 'Concluído') obj.status = 'Em andamento';
+  }
+
   if (atual) {
+    // mudança de seção: ganha o próximo número da seção nova e leva os subitens junto
+    if ('secao' in v && v.secao !== atual.secao) {
+      if (PEND_SECOES.indexOf(v.secao) < 0) throw falha('Seção inválida.');
+      if (atual.pai || String(atual.numero).indexOf('.') >= 0) throw falha('Um subitem fica sempre na seção do item principal.');
+      const filhos = filhosDe(todas, atual);
+      const destino = todas.filter(p => p.secao === v.secao);
+      const nums = destino.map(p => parseInt(String(p.numero).split('.')[0], 10)).filter(n => !isNaN(n));
+      const novoNum = String((nums.length ? Math.max.apply(null, nums) : 0) + 1);
+      const ordem = Math.max.apply(null, [PEND_SECOES.indexOf(v.secao) * 1000].concat(destino.map(p => Number(p.ordem) || 0))) + 1;
+      Object.assign(obj, { secao: v.secao, numero: novoNum, ordem });
+      filhos.sort((a, b) => (Number(a.ordem) || 0) - (Number(b.ordem) || 0)).forEach((f, i) => {
+        const suf = String(f.numero).indexOf('.') >= 0 ? String(f.numero).split('.').slice(1).join('.') : String(i + 1);
+        gravar(t, { secao: v.secao, numero: novoNum + '.' + suf, ordem: ordem + (i + 1) / 100, pai: atual.id }, f._row);
+      });
+    }
     gravar(t, obj, atual._row);
-    return obj.status ? 'Situação: ' + obj.status + '.' : 'criticidade' in v && Object.keys(v).length <= 2 ? 'Criticidade: ' + (obj.criticidade || 'sem definição') + '.' : 'Salvo.';
+    if (obj.secao) return 'Movida para ' + obj.secao + ' como nº ' + obj.numero + '.';
+    return obj.status && 'status' in v ? 'Situação: ' + obj.status + '.' : 'criticidade' in v && Object.keys(v).length <= 2 ? 'Criticidade: ' + (obj.criticidade || 'sem definição') + '.' : 'Salvo.';
+  }
+
+  if (!obj.titulo) throw falha('Descreva a pendência.');
+  const comuns = { criadaPor: conta.nome, origem: sindico ? 'Síndico' : '', vistaEm: '', vistaPor: '', execucoes: '', ultimaVez: '' };
+  // subitem de uma pendência existente
+  if (v.pai) {
+    const pai = todas.find(p => p.id === texto(v.pai, 40));
+    if (!pai) throw falha('A pendência principal não existe mais. Atualize a tela.');
+    if (pai.pai || String(pai.numero).indexOf('.') >= 0) throw falha('Não é possível criar subitem de um subitem.');
+    const filhos = filhosDe(todas, pai);
+    const sufs = filhos.map(f => parseInt(String(f.numero).split('.').pop(), 10)).filter(n => !isNaN(n));
+    const numero = pai.numero ? pai.numero + '.' + ((sufs.length ? Math.max.apply(null, sufs) : 0) + 1) : '';
+    const daSecao = todas.filter(p => p.secao === pai.secao).sort((a, b) => (Number(a.ordem) || 0) - (Number(b.ordem) || 0));
+    const fim = Math.max.apply(null, [Number(pai.ordem) || 0].concat(filhos.map(f => Number(f.ordem) || 0)));
+    const depois = daSecao.find(p => (Number(p.ordem) || 0) > fim && filhos.indexOf(p) < 0);
+    Object.assign(obj, comuns, {
+      id: novoId('pd'), secao: pai.secao, numero, pai: pai.id,
+      status: obj.status || 'Pendente', responsavel: obj.responsavel || '', prazo: obj.prazo || '', obs: obj.obs || '',
+      criticidade: obj.criticidade || pai.criticidade || '', tipo: obj.tipo || '', frequencia: obj.frequencia || '',
+      ordem: depois ? (fim + Number(depois.ordem)) / 2 : fim + 1
+    });
+    gravar(t, obj);
+    return 'Subitem ' + (numero || '') + ' adicionado.';
   }
   const secao = PEND_SECOES.indexOf(v.secao) >= 0 ? v.secao : PEND_SECOES[PEND_SECOES.length - 1];
-  if (!obj.titulo) throw falha('Descreva a pendência.');
   const daSecao = todas.filter(p => p.secao === secao);
   const nums = daSecao.map(p => parseInt(String(p.numero).split('.')[0], 10)).filter(n => !isNaN(n));
   const base = PEND_SECOES.indexOf(secao) * 1000;
-  Object.assign(obj, {
-    id: novoId('pd'), secao,
+  Object.assign(obj, comuns, {
+    id: novoId('pd'), secao, pai: '',
     numero: String((nums.length ? Math.max.apply(null, nums) : 0) + 1),
     status: obj.status || 'Pendente', responsavel: obj.responsavel || '', prazo: obj.prazo || '', obs: obj.obs || '',
-    criadaPor: conta.nome, origem: sindico ? 'Síndico' : '', vistaEm: '', vistaPor: '', criticidade: obj.criticidade || '',
+    criticidade: obj.criticidade || '', tipo: obj.tipo || '', frequencia: obj.frequencia || '',
     ordem: Math.max.apply(null, [base].concat(daSecao.map(p => Number(p.ordem) || 0))) + 1
   });
   gravar(t, obj);
-  return 'Pendência ' + obj.numero + ' adicionada.';
+  return (obj.tipo === 'Constante' ? 'Tarefa constante ' : 'Pendência ') + obj.numero + ' adicionada.';
+}
+
+function pendExcluir(id) {
+  const t = tabela('pend');
+  const todas = linhas(t);
+  const p = todas.find(x => x.id === texto(id, 40));
+  if (!p) throw falha('Esta pendência já foi excluída.');
+  const filhos = filhosDe(todas, p);
+  [p].concat(filhos).map(x => x._row).sort((a, b) => b - a).forEach(r => t.sh.deleteRow(r));
+  return filhos.length ? 'Pendência e ' + filhos.length + ' subite' + (filhos.length === 1 ? 'm' : 'ns') + ' excluídos.' : 'Pendência excluída.';
+}
+
+// ---------- histórico de acessos ----------
+
+const ACESSO_TIPOS = { login: 'Entrou com senha', retorno: 'Voltou ao sistema', falha: 'Senha errada' };
+
+// Grava uma linha na aba Acessos. Nunca impede a entrada: se der erro, só não registra.
+function registrarAcesso(conta, usuarioDigitado, reg) {
+  try {
+    const t = tabela('acessos');
+    const motivo = conta ? (reg.motivo === 'login' ? 'login' : 'retorno') : 'falha';
+    gravar(t, {
+      id: novoId('ac'), quando: agora(), usuario: texto(usuarioDigitado, 40).toLowerCase(),
+      nome: conta ? conta.nome : '', perfil: conta ? conta.perfil : '',
+      entrada: texto(reg.entrada, 30), aparelho: texto(reg.aparelho, 80), tipo: ACESSO_TIPOS[motivo]
+    });
+  } catch (e) { /* o registro do acesso não pode atrapalhar a entrada */ }
+}
+
+function lerAcessos(dias) {
+  const t = tabela('acessos');
+  const ultima = t.sh.getLastRow();
+  if (ultima < 2) return [];
+  const n = Math.min(ultima - 1, 5000);
+  const vals = t.sh.getRange(ultima - n + 1, 1, n, t.ncol).getValues();
+  const corte = Number(dias) > 0 ? Utilities.formatDate(new Date(Date.now() - Number(dias) * 864e5), Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
+  const porNome = Object.keys(ACESSO_TIPOS).reduce((m, k) => { m[ACESSO_TIPOS[k]] = k; return m; }, {});
+  const out = [];
+  for (let i = vals.length - 1; i >= 0; i--) {
+    const r = vals[i];
+    const quando = r[t.idx.quando] instanceof Date ? Utilities.formatDate(r[t.idx.quando], Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') : String(r[t.idx.quando]);
+    if (!r[t.idx.id]) continue;
+    if (corte && quando.slice(0, 10) < corte) continue;
+    out.push({ quando, usuario: String(r[t.idx.usuario]), nome: String(r[t.idx.nome]), perfil: String(r[t.idx.perfil]),
+      entrada: String(r[t.idx.entrada]), aparelho: String(r[t.idx.aparelho]), motivo: porNome[String(r[t.idx.tipo])] || 'retorno' });
+  }
+  return out;
 }
 
 function ehSindico(conta) {
@@ -1838,13 +1981,6 @@ function garantirSindico() {
   return ' Perfil Síndico criado.';
 }
 
-function pendExcluir(id) {
-  const t = tabela('pend');
-  const p = linhas(t).find(x => x.id === texto(id, 40));
-  if (!p) throw falha('Esta pendência já foi excluída.');
-  t.sh.deleteRow(p._row);
-  return 'Pendência excluída.';
-}
 
 function celula(v, isNum) {
   if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');

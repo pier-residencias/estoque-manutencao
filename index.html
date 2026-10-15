@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500&family=Public+Sans:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="estilo.css?v=20261015f">
+<link rel="stylesheet" href="estilo.css?v=20261015h">
 </head>
 <body>
 <div class="login" id="login" hidden>
@@ -62,9 +62,12 @@
     <button type="button" class="admbtn" id="tab-adm" aria-haspopup="true" aria-expanded="false" aria-controls="adm-menu" hidden aria-label="Administração"><span class="lbl-l">Administração</span><span class="lbl-c" aria-hidden="true">Adm.</span> <span class="badge alert" id="b-adm" hidden>0</span> <span class="car" aria-hidden="true">▾</span></button>
   </div>
   <div class="admmenu" id="adm-menu" role="menu" aria-label="Administração" hidden>
-    <div class="mh">Somente administração</div>
+    <div class="mh">Pendências</div>
     <button type="button" role="menuitem" data-adm-tab="pendencias"><b>Controle de pendências</b><span>Lista do síndico: situação, responsável e prazo</span></button>
     <button type="button" role="menuitem" data-adm-tab="pendencias" data-adm-acao="nova"><b>Incluir pendência</b><span>Registrar uma pendência nova na lista</span></button>
+    <div class="mh" data-grupo="equipe">Equipe</div>
+    <button type="button" role="menuitem" data-adm-tab="usuarios"><b>Usuários e permissões</b><span>Logins, perfis e o que cada um pode fazer</span></button>
+    <button type="button" role="menuitem" data-adm-tab="acessos"><b>Histórico de acessos</b><span>Quem entrou no sistema, quando e de onde</span></button>
   </div>
 </nav>
 
@@ -422,12 +425,28 @@
     </div>
   </section>
 
+  <!-- HISTÓRICO DE ACESSOS (menu Administração, só perfil Administração) -->
+  <section id="t-acessos" hidden>
+    <div class="sec-head"><h2 class="sec">Histórico de acessos</h2><span class="muted">Cada entrada no sistema, com data, hora, setor escolhido e aparelho. Tentativas com senha errada aparecem em vermelho.</span></div>
+    <div class="ac-resumo" id="ac-resumo"></div>
+    <div class="toolbar">
+      <select class="input" id="ac-pessoa" aria-label="Pessoa"><option value="">Todas as pessoas</option></select>
+      <select class="input" id="ac-periodo" aria-label="Período"><option value="7">Últimos 7 dias</option><option value="30" selected>Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="0">Tudo</option></select>
+      <select class="input" id="ac-tipo" aria-label="Tipo"><option value="">Todos os tipos</option><option value="login">Entrou com senha</option><option value="retorno">Voltou ao sistema</option><option value="falha">Senha errada</option></select>
+      <button class="btn" type="button" id="ac-atualizar">Atualizar</button>
+    </div>
+    <div class="tablebox"><table>
+      <thead><tr><th>Data e hora</th><th>Pessoa</th><th class="hide-s">Perfil</th><th>Entrou por</th><th class="hide-m">Aparelho</th><th>Tipo</th></tr></thead>
+      <tbody id="ac-body"><tr><td colspan="6"><div class="empty">Carregando…</div></td></tr></tbody>
+    </table></div>
+  </section>
+
   <!-- PENDÊNCIAS (menu Administração) -->
   <section id="t-pendencias" hidden>
     <div class="sec-head"><h2 class="sec">Controle de pendências</h2><span class="muted">Lista do síndico. Cada alteração vai direto para a aba Pendencias da planilha.</span><button class="btn primary" type="button" id="pd-nova">+ Incluir pendência</button></div>
     <div class="pd-stats" id="pd-stats"></div>
     <div class="pd-prog"><span class="track"><i id="pd-bar"></i></span><span id="pd-prog">Carregando…</span></div>
-    <div class="notice warn" id="pd-aviso" hidden>Para gravar a criticidade, a planilha precisa do código novo do Apps Script (colar, executar <b>autorizar</b> e implantar uma nova versão).</div>
+    <div class="notice warn" id="pd-aviso" hidden>Para usar criticidade, tarefas constantes e subitens, a planilha precisa do código novo do Apps Script (colar, executar <b>autorizar</b> e implantar uma nova versão).</div>
     <div class="toolbar">
       <input class="input" id="pd-q" type="search" placeholder="Buscar pendência, observação ou responsável">
       <select class="input" id="pd-fs" aria-label="Filtrar por situação"></select>
@@ -445,7 +464,7 @@
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script src="config.js"></script>
-<script src="nfe.js?v=20261015f"></script>
-<script src="app.js?v=20261015f"></script>
+<script src="nfe.js?v=20261015h"></script>
+<script src="app.js?v=20261015h"></script>
 </body>
 </html>

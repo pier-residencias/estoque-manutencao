@@ -69,9 +69,17 @@ Em **Administração → Controle de pendências** fica a lista de pendências c
 
 Cada pendência tem **criticidade** (Baixa, Média ou Alta), escolhida na própria linha ou ao incluir. As de criticidade alta ainda em aberto ficam marcadas com um ponto vermelho, aparecem contadas no resumo e podem ser filtradas; no texto do e-mail a criticidade vai junto de cada item.
 
+**Tarefa constante.** Uma pendência pode ser *Pontual* (tem fim e é concluída) ou *Tarefa constante* (rotina que se repete, como a verificação mensal do deck). A tarefa constante tem frequência (diária a anual) e, no lugar da situação, mostra a frequência e o botão **✓ Feito hoje**, que registra a execução e agenda a próxima data (campo de prazo = próxima execução; vencida fica em vermelho). As últimas execuções ficam na coluna Execuções e aparecem ao editar. Tarefas constantes não entram na porcentagem de concluídas.
+
+**Subitens.** Cada pendência tem **+ subitem**: o subitem recebe o número N.1, N.2… e fica logo abaixo do item. Não há subitem de subitem. Excluir um item exclui também os subitens dele, e mudar a seção leva os subitens junto.
+
+**Editar.** O link **editar** de cada linha abre todos os campos: seção, descrição, detalhes, tipo e frequência, criticidade, situação, prazo e responsável.
+
 Para incluir, use **+ Incluir pendência** (no topo da tela ou em **Administração → Incluir pendência**): seção, descrição, detalhes, prazo e responsável.
 
 **Síndico.** A função `autorizar` cria o perfil **Síndico**, só com a permissão Pendências (acesso completo à lista). Crie o login dele em **Usuários** com esse perfil; ele entra escolhendo **Administração** no campo Setor (logins sem setor do estoque são orientados a usar essa opção). O que o síndico inclui chega para a equipe destacado como **Nova do síndico**, com contador vermelho no menu Administração e no resumo; o destaque some quando alguém da equipe clica em **Ciente** ou altera a pendência. Na aba Pendencias da planilha ficam as colunas Incluída por, Origem, Vista em e Vista por.
+
+**Usuários e Histórico de acessos.** Usuários e permissões ficam no menu Administração (saíram da barra da Manutenção). O **Histórico de acessos** registra na aba Acessos cada entrada com senha, cada volta ao sistema com a sessão salva e cada tentativa com senha errada (a senha nunca é gravada), com data, hora, setor escolhido e aparelho. Só quem tem a permissão **Histórico de acessos** vê essa tela; por padrão, só o perfil Administração.
 
 O link do Apps Script aberto no navegador mostra a versão do código instalado (campo `versao`), o que ajuda a conferir se a implantação nova entrou.
 
