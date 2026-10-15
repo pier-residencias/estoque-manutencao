@@ -57,9 +57,11 @@ Os dados ficam nas abas **Demandas** e **Preventivas** da planilha. As permissõ
 
 Em **Registrar → Entrada**, o campo **Foto da nota fiscal** anexa a foto (ou o PDF) da nota da compra, até 4 arquivos. Os arquivos ficam na pasta "Notas fiscais - Pier Gestão" no Drive, ao lado da planilha, e o link vai na coluna **Foto da NF** da aba Movimentacoes. Para lançar outros itens da mesma nota, o fornecedor e o número continuam preenchidos e a mesma foto vai junto, sem enviar de novo. No **Histórico**, o link **ver nota** abre o arquivo.
 
-### Leitura automática da nota (PDF)
+### Leitura automática da nota (PDF ou foto)
 
-Ao anexar o **PDF da nota** (a DANFE que a loja envia), o site lê fornecedor, número, data e a lista de produtos (descrição, quantidade e valor). O botão **Conferir e registrar** abre a lista: para cada linha o sistema sugere o item do estoque mais parecido (ou cadastrar como item novo), e a pessoa confere antes de gravar todas as entradas de uma vez, com a nota anexada. A escolha feita para cada produto de cada fornecedor fica lembrada naquele aparelho. A leitura usa o pdf.js (cdnjs) e o arquivo `nfe.js`; foto de nota não tem texto para ler.
+Ao anexar o **PDF da nota** (a DANFE que a loja envia), o site lê fornecedor, número, data e a lista de produtos (descrição, quantidade e valor). O botão **Conferir e registrar** abre a lista: para cada linha o sistema sugere o item do estoque mais parecido (ou cadastrar como item novo), e a pessoa confere antes de gravar todas as entradas de uma vez, com a nota anexada. A escolha feita para cada produto de cada fornecedor fica lembrada naquele aparelho. A leitura usa o pdf.js (cdnjs) e o arquivo `nfe.js`.
+
+Sem PDF, o site lê a **foto** da nota com reconhecimento de texto (Tesseract.js, carregado do jsDelivr só quando há foto; na primeira vez baixa o idioma português, depois fica guardado no aparelho). A foto é reduzida para até 3000 px, passa para tons de cinza e é endireitada (inclinação de até 6° e nota deitada). Cada linha de produto só é aceita quando quantidade × valor unitário = total, o que corrige vírgulas perdidas e letras trocadas por números; o que não fecha a conta aparece marcado como "Confira qtd e valor". Na conferência, o nome do item novo pode ser corrigido antes de cadastrar. O PDF continua sendo o mais preciso.
 
 ## Importar inventário
 

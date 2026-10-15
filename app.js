@@ -1697,7 +1697,7 @@ function renderNfAnexo(){
   if (S.nfArq.length) {
     const L = S.nfLida;
     lista.innerHTML = S.nfArq.map((f,i) => `<span class="nf-chip">${f.type==="application/pdf" ? "PDF" : "Foto"} · ${esc(f.name.length>28 ? f.name.slice(0,25)+"…" : f.name)} <button type="button" class="link small-link" data-nfx="${i}" aria-label="Tirar ${esc(f.name)}">tirar</button></span>`).join("")
-      + (L && L.arquivo && S.nfArq.includes(L.arquivo) ? (L.lendo ? `<span class="nf-chip"><span class="spin" aria-hidden="true"></span> Lendo os itens da nota…</span>`
+      + (L && L.arquivo && S.nfArq.includes(L.arquivo) ? (L.lendo ? `<span class="nf-chip"><span class="spin" aria-hidden="true"></span> ${L.foto ? `Lendo a foto da nota… <span id="nf-prog">${L.prog||""}</span>` : "Lendo os itens da nota…"}</span>`
         : L.erro ? `<span class="nf-chip">${esc(L.erro)}</span>`
         : `<button type="button" class="btn primary small" id="m-nf-ler">Conferir e registrar ${L.dados.itens.length} ${L.dados.itens.length===1?"item":"itens"} da nota${L.dados.numero ? " " + esc(L.dados.numero) : ""}</button>`) : "");
     const b = $("#m-nf-ler"); if (b) b.onclick = () => abrirLote();
@@ -1712,14 +1712,21 @@ $("#m-nf-arq").addEventListener("change", () => {
   if (grande) toast(`O PDF ${grande.name} passa de 7 MB. Tire uma foto da nota no lugar.`, true);
   S.nfArq = S.nfArq.concat(novos.filter(f => f !== grande)).slice(0, 4);
   $("#m-nf-arq").value = ""; renderNfAnexo();
-  const pdf = S.nfArq.find(f => f.type === "application/pdf");
-  if (pdf && (!S.nfLida || S.nfLida.arquivo !== pdf)) lerNotaPDF(pdf);
+  lerNotaSeNovo();
 });
+// lê o PDF; sem PDF, lê as fotos (todas juntas, como páginas da mesma nota)
+function lerNotaSeNovo(){
+  const pdf = S.nfArq.find(f => f.type === "application/pdf");
+  if (pdf) { if (!S.nfLida || S.nfLida.arquivo !== pdf) lerNotaPDF(pdf); return; }
+  const fotos = S.nfArq.filter(f => /^image\//.test(f.type));
+  const chave = fotos.map(f => f.name + ":" + f.size).join("|");
+  if (fotos.length && (!S.nfLida || S.nfLida.chave !== chave)) lerNotaFoto(fotos, chave);
+}
 $("#m-nf-lista").addEventListener("click", e => {
   const b = e.target.closest("[data-nfx]"); if (!b) return;
   if (b.dataset.nfx === "reuso") S.nfAnexo = null; else S.nfArq.splice(Number(b.dataset.nfx), 1);
   if (S.nfLida && !S.nfArq.includes(S.nfLida.arquivo)) S.nfLida = null;
-  renderNfAnexo();
+  renderNfAnexo(); lerNotaSeNovo();
 });
 ["#m-forn","#m-nf"].forEach(sel => $(sel).addEventListener("input", renderNfAnexo));
 const lerBase64 = file => new Promise((ok, erro) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = () => erro(new Error("ler")); r.readAsDataURL(file); });
@@ -1778,6 +1785,121 @@ async function lerNotaPDF(file){
   // a conferência abre sozinha, já preenchida
   if (dados && dados.itens.length && $("#modal").hidden && S.tab === "registrar") abrirLote();
 }
+// ---------- leitura da foto da nota (reconhecimento de texto no próprio navegador) ----------
+const TESS = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+let ocrPronto = null;
+function carregarOCR(){
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (!ocrPronto) ocrPronto = new Promise((ok, erro) => {
+    const s = document.createElement("script"); s.src = TESS;
+    s.onload = () => window.Tesseract ? ok(window.Tesseract) : (ocrPronto = null, erro(new Error("leitor")));
+    s.onerror = () => { ocrPronto = null; erro(new Error("leitor")); };
+    document.head.appendChild(s);
+  });
+  return ocrPronto;
+}
+const abrirImagem = file => new Promise((ok, erro) => {
+  const url = URL.createObjectURL(file), img = new Image();
+  img.onload = () => { ok(img); setTimeout(() => URL.revokeObjectURL(url), 0); };
+  img.onerror = () => { URL.revokeObjectURL(url); erro(new Error("img")); };
+  img.src = url;
+});
+// ângulo da foto torta: o que deixa as linhas de texto mais "nítidas" na projeção horizontal
+function anguloDoTexto(cinza, w, h, deLado){
+  const k = Math.max(1, Math.round(Math.max(w, h) / 900)), sw = Math.floor(w / k), sh = Math.floor(h / k);
+  const p = new Float32Array(sw * sh);
+  for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) p[y*sw + x] = cinza[(y*k)*w + x*k];
+  // tinta = mais escuro que a média da vizinhança (imagem integral)
+  const I = new Float64Array((sw+1) * (sh+1));
+  for (let y = 0; y < sh; y++) { let lin = 0; for (let x = 0; x < sw; x++) { lin += p[y*sw+x]; I[(y+1)*(sw+1)+x+1] = I[y*(sw+1)+x+1] + lin; } }
+  const r = Math.max(4, Math.round(sw / 60)), xs = [], ys = [];
+  for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+    const x0 = Math.max(0, x-r), x1 = Math.min(sw, x+r+1), y0 = Math.max(0, y-r), y1 = Math.min(sh, y+r+1);
+    const m = (I[y1*(sw+1)+x1] - I[y0*(sw+1)+x1] - I[y1*(sw+1)+x0] + I[y0*(sw+1)+x0]) / ((x1-x0)*(y1-y0));
+    if (p[y*sw+x] < m - 12) { if (deLado) { xs.push(y - sh/2); ys.push(x - sw/2); } else { xs.push(x - sw/2); ys.push(y - sh/2); } }
+  }
+  if (xs.length < 200) return {a:0, nota:0};
+  const D = Math.ceil(Math.hypot(sw, sh)) + 2;
+  let melhor = 0, nota = -1;
+  for (let g = -6; g <= 6.001; g += 0.25) {
+    const a = g * Math.PI / 180, sn = Math.sin(a), cs = Math.cos(a), hist = new Float32Array(D);
+    for (let i = 0; i < xs.length; i++) hist[Math.round(xs[i]*sn + ys[i]*cs + D/2)]++;
+    let v = 0; for (let i = 1; i < D; i++) { const d = hist[i] - hist[i-1]; v += d*d; }
+    if (v > nota) { nota = v; melhor = a; }
+  }
+  return {a:melhor, nota};
+}
+// prepara a foto: até 3000 px, tons de cinza, endireitada (e girada 90° quando pedido)
+async function prepararFoto(file, giro){
+  const img = await abrirImagem(file);
+  const s = Math.min(1, 3000 / Math.max(img.naturalWidth, img.naturalHeight));
+  let w = Math.round(img.naturalWidth * s), h = Math.round(img.naturalHeight * s);
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const x = c.getContext("2d", {willReadFrequently: true}); x.drawImage(img, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h), px = d.data, cinza = new Uint8ClampedArray(w*h);
+  for (let i = 0, j = 0; j < cinza.length; i += 4, j++) { const g = (px[i]*299 + px[i+1]*587 + px[i+2]*114) / 1000; cinza[j] = g; px[i] = px[i+1] = px[i+2] = g; }
+  x.putImageData(d, 0, 0);
+  let base = c, cg = cinza;
+  if (giro) {
+    const r = document.createElement("canvas"); r.width = h; r.height = w;
+    const rx = r.getContext("2d", {willReadFrequently: true});
+    rx.translate(h/2, w/2); rx.rotate(giro * Math.PI / 180); rx.drawImage(c, -w/2, -h/2);
+    base = r; [w, h] = [h, w];
+    const rd = rx.getImageData(0, 0, w, h).data; cg = new Uint8ClampedArray(w*h);
+    for (let i = 0, j = 0; j < cg.length; i += 4, j++) cg[j] = rd[i];
+  }
+  const {a, nota} = anguloDoTexto(cg, w, h);
+  // linhas de texto mais marcadas na vertical = nota fotografada deitada
+  const deitada = !giro && nota > 0 && anguloDoTexto(cg, w, h, true).nota > nota * 1.3;
+  if (deitada || Math.abs(a) < 0.002) return {canvas:base, deitada};
+  const o = document.createElement("canvas"); o.width = w; o.height = h;
+  const ox = o.getContext("2d"); ox.fillStyle = "#fff"; ox.fillRect(0, 0, w, h);
+  ox.translate(w/2, h/2); ox.rotate(a); ox.drawImage(base, -w/2, -h/2);
+  return {canvas:o, deitada:false};
+}
+async function lerNotaFoto(fotos, chave){
+  S.nfLida = {arquivo:fotos[0], chave, foto:true, lendo:true, prog:""}; renderNfAnexo();
+  const vivo = () => S.nfLida && S.nfLida.chave === chave;
+  const prog = t => { if (!vivo()) return; S.nfLida.prog = t; const el = $("#nf-prog"); if (el) el.textContent = t; };
+  let dados = null, erro = "", worker = null;
+  try {
+    prog("preparando");
+    const T = await carregarOCR();
+    let etapa = 0, total = fotos.length;
+    worker = await T.createWorker("por", 1, { logger: m => {
+      if (m.status === "recognizing text") prog(Math.round(((etapa + (m.progress||0)) / total) * 100) + "%");
+      else if (/load|initializ/i.test(m.status || "") && etapa === 0) prog("abrindo o leitor");
+    }});
+    await worker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
+    const ler = async canvas => (await worker.recognize(canvas)).data.text || "";
+    const temItens = t => LeitorNF.lerFotoDanfe(t.split("\n")).itens.length > 0;
+    const textos = [];
+    for (const f of fotos) {
+      if (!vivo()) return;
+      const r = await prepararFoto(f, 0);
+      let t;
+      if (!r.deitada) t = await ler(r.canvas);
+      else {
+        // nota fotografada deitada: gira para um lado e, se não sair nada, para o outro
+        t = await ler((await prepararFoto(f, 90)).canvas);
+        if (!temItens(t)) { const t2 = await ler((await prepararFoto(f, -90)).canvas); if (temItens(t2)) t = t2; }
+      }
+      textos.push(t); etapa++;
+    }
+    dados = LeitorNF.lerFotoDanfe(textos.join("\n\n").split("\n"));
+    if (!dados.itens.length) erro = "Não consegui ler os itens nesta foto. Tire outra mais de perto, com a nota reta e bem iluminada, ou lance os itens à mão.";
+  } catch(e){
+    erro = e && e.message === "leitor" ? "Não deu para carregar o leitor de fotos. Verifique a internet." : e && e.message === "img" ? "Não consegui abrir esta foto. Tente tirar de novo." : "Não consegui ler esta foto. Lance os itens à mão.";
+  } finally { if (worker) try { await worker.terminate(); } catch(e){} }
+  if (!vivo()) return;
+  S.nfLida = {arquivo:fotos[0], chave, foto:true, dados, erro};
+  if (dados) {
+    if (dados.fornecedor && !$("#m-forn").value.trim()) $("#m-forn").value = dados.fornecedor;
+    if (dados.numero && !$("#m-nf").value.trim()) $("#m-nf").value = dados.numero;
+  }
+  renderNfAnexo();
+  if (dados && dados.itens.length && $("#modal").hidden && S.tab === "registrar") abrirLote();
+}
 const mapaNF = { ler(){ try { return JSON.parse(localStorage.getItem("nf-mapa")||"{}"); } catch(e){ return {}; } },
   gravar(m){ try { localStorage.setItem("nf-mapa", JSON.stringify(m)); } catch(e){} } };
 const chaveProduto = (forn, it) => norm(forn).replace(/[^a-z0-9]/g,"") + "|" + (it.codigo && it.codigo.length >= 6 ? it.codigo : norm(it.descricao));
@@ -1814,7 +1936,7 @@ function abrirLote(){
     const sugIds = new Set(sug.map(x => x.it.id)); if (lembrado) sugIds.add(lembrado);
     const topo = [...sugIds].map(id => S.itens.get(id)).filter(Boolean);
     return `<div class="lote-item" data-i="${i}">
-      <label class="lote-top"><input type="checkbox" data-k="usar" checked> <span><b>${esc(it.descricao)}</b> ${seloLote(st)}<span class="sub">${it.codigo ? "cód. " + esc(it.codigo) + " · " : ""}${fNum(it.qtd)} ${esc(it.unidade)} × ${fBRL(it.valorUnit)} = ${fBRL(it.valorTotal)}</span></span></label>
+      <label class="lote-top"><input type="checkbox" data-k="usar" checked> <span><b>${esc(it.descricao)}</b> ${seloLote(st)}${it.incerto ? '<span class="pill s-baixo">Confira qtd e valor</span>' : ""}<span class="sub">${it.codigo ? "cód. " + esc(it.codigo) + " · " : ""}${fNum(it.qtd)} ${esc(it.unidade)} × ${fBRL(it.valorUnit)} = ${fBRL(it.valorTotal)}</span></span></label>
       <div class="lote-campos">
         <div class="field"><label for="lt-it-${i}">Item do estoque</label><select class="input" id="lt-it-${i}" data-k="item">
           <option value="" ${sel===""?"selected":""}>Escolha o item do estoque…</option>
@@ -1822,6 +1944,7 @@ function abrirLote(){
           ${podeNovo ? `<option value="__novo" ${sel==="__novo"?"selected":""}>+ Cadastrar como item novo: ${esc(nomeDeNota(it.descricao))}</option>` : ""}
           <optgroup label="Todos os itens">${todos.filter(x => !sugIds.has(x.id)).map(opt).join("")}</optgroup>
         </select></div>
+        <div class="field lote-nome" ${sel==="__novo" ? "" : "hidden"}><label for="lt-n-${i}">Nome do item novo</label><input class="input" id="lt-n-${i}" data-k="nome" value="${esc(nomeDeNota(it.descricao))}"></div>
         <div class="field"><label for="lt-q-${i}">Quantidade</label><input class="input num" id="lt-q-${i}" data-k="qtd" inputmode="decimal" value="${esc(String(Math.round(it.qtd*1000)/1000).replace(".", ","))}"></div>
         <div class="field"><label for="lt-v-${i}">Valor unitário (R$)</label><input class="input num" id="lt-v-${i}" data-k="valor" inputmode="decimal" value="${esc(fValorNF(it.valorUnit))}"></div>
       </div>
@@ -1835,6 +1958,7 @@ function abrirLote(){
   $("#modal-box").innerHTML = `
     <h3>Conferir a nota${nf ? " " + esc(nf) : ""}</h3>
     <p class="muted" style="margin:-6px 0 14px">${esc([forn, N.data ? "emitida em " + fData(N.data) : "", N.valorTotal != null ? "total " + fBRL(N.valorTotal) : ""].filter(Boolean).join(" · "))}. O sistema já preencheu tudo: confira as linhas marcadas em amarelo e clique em Finalizar.</p>
+    ${N.foto ? `<div class="notice">Estes itens foram lidos da <b>foto</b> da nota. Confira nomes, quantidades e valores com a nota antes de finalizar.${N.valorTotal != null && Math.abs(N.itens.reduce((t, it) => t + (Number(it.valorTotal)||0), 0) - N.valorTotal) > 0.05 ? " A soma dos itens não bate com o total da nota: pode ter faltado algum item." : ""}</div>` : ""}
     ${jaLancadas.length ? `<div class="notice warn"><b>Atenção: esta nota já foi lançada.</b> Há ${jaLancadas.length} ${jaLancadas.length===1?"entrada":"entradas"} da nota ${esc(nf)} registrada${jaLancadas.length===1?"":"s"} em ${esc(fData(jaLancadas[0].data))} por ${esc(jaLancadas[0].registradoPor||"—")}. Finalizar de novo vai somar as quantidades outra vez no estoque.</div>` : ""}
     <form class="form" id="f-lote" novalidate autocomplete="off">
       <div class="field"><label for="lt-forn">Fornecedor</label><input class="input" id="lt-forn" value="${esc(forn)}" list="dl-forn"></div>
@@ -1857,6 +1981,7 @@ function abrirLote(){
   $$("#f-lote [data-k=item]").forEach(sel => sel.addEventListener("change", () => {
     const top = sel.closest(".lote-item").querySelector(".selo"), st = sel.value === "__novo" ? "novo" : sel.value ? "manual" : "escolha";
     if (top) top.outerHTML = seloLote(st);
+    const nm = sel.closest(".lote-item").querySelector(".lote-nome"); if (nm) nm.hidden = sel.value !== "__novo";
     contar();
   }));
   $$("#f-lote [data-k=usar]").forEach(c => c.addEventListener("change", () => { c.closest(".lote-item").classList.toggle("off", !c.checked); contar(); }));
@@ -1866,7 +1991,7 @@ function abrirLote(){
     ev.preventDefault();
     const msg = $("#lt-msg"); msg.className = "hint err";
     const fornecedor = $("#lt-forn").value.trim(), numero = $("#lt-nf").value.trim(), data = $("#lt-data").value || hoje(), receb = $("#lt-rec").value.trim();
-    const filas = $$("#f-lote .lote-item").map(el => ({el, it: N.itens[Number(el.dataset.i)], usar: $("[data-k=usar]", el), sel: $("[data-k=item]", el).value, qtd: pQtd($("[data-k=qtd]", el).value), valor: $("[data-k=valor]", el).value.trim()}))
+    const filas = $$("#f-lote .lote-item").map(el => ({el, it: N.itens[Number(el.dataset.i)], usar: $("[data-k=usar]", el), sel: $("[data-k=item]", el).value, nome: ($("[data-k=nome]", el)||{}).value, qtd: pQtd($("[data-k=qtd]", el).value), valor: $("[data-k=valor]", el).value.trim()}))
       .filter(f => f.usar.checked && !f.usar.disabled);
     const falta = filas.find(f => !f.sel); if (falta) { msg.textContent = `Escolha o item do estoque para "${falta.it.descricao}".`; $("[data-k=item]", falta.el).focus(); return; }
     const semQtd = filas.find(f => !(f.qtd > 0)); if (semQtd) { msg.textContent = `Quantidade inválida em "${semQtd.it.descricao}".`; return; }
@@ -1886,7 +2011,7 @@ function abrirLote(){
         try {
           let itemId = f.sel;
           if (itemId === "__novo") {
-            const nome = nomeDeNota(f.it.descricao);
+            const nome = String(f.nome || "").trim() || nomeDeNota(f.it.descricao);
             const base = dadosDeItemNovo(f.it.descricao);
             await api("salvarItem", {item:Object.assign(base, {codigo:"", setor:S.setor, nome, unidade:String(f.it.unidade||"un").toLowerCase(), qtd:0, minimo:0, obs:`Cadastrado pela nota ${numero}${fornecedor ? " (" + fornecedor + ")" : ""}${f.it.codigo ? " · cód. do fornecedor " + f.it.codigo : ""}`})});
             const novo = itensArr().filter(i => i.nome === nome).sort((a,b) => String(b.criadoEm).localeCompare(String(a.criadoEm)))[0];
@@ -1897,7 +2022,7 @@ function abrirLote(){
           if (ids.length) mov.nfFotos = ids.join(",");
           await api("registrar", {mov});
           const itR = S.itens.get(itemId) || {};
-          registrados.push({itemId, nome: itR.nome || nomeDeNota(f.it.descricao), codigo: itR.codigo || "", unidade: itR.unidade || "", estoque: itR.qtd, qtd: f.qtd, valor: mov.valorUnit, novo: f.sel === "__novo", descricao: f.it.descricao});
+          registrados.push({itemId, nome: itR.nome || f.nome || nomeDeNota(f.it.descricao), codigo: itR.codigo || "", unidade: itR.unidade || "", estoque: itR.qtd, qtd: f.qtd, valor: mov.valorUnit, novo: f.sel === "__novo", descricao: f.it.descricao});
           mapa[chaveProduto(fornecedor, f.it)] = itemId;
           f.usar.disabled = true; f.el.classList.add("feito"); st.className = "hint lote-st ok"; st.textContent = "Registrado.";
           feitas++;
