@@ -94,6 +94,16 @@ const ABAS = {
       ['atualizadoEm', 'Atualizado em']
     ],
     num: ['intervalo', 'prazoDias']
+  },
+  pend: {
+    nome: 'Pendencias',
+    criar: true,
+    cols: [
+      ['id', 'ID'], ['secao', 'Seção'], ['numero', 'Nº'], ['titulo', 'Pendência'], ['status', 'Situação'],
+      ['responsavel', 'Responsável'], ['prazo', 'Prazo'], ['obs', 'Observação'], ['ordem', 'Ordem'],
+      ['atualizadoEm', 'Atualizado em'], ['atualizadoPor', 'Atualizado por']
+    ],
+    num: ['ordem']
   }
 };
 
@@ -183,6 +193,7 @@ function doPost(e) {
     if (req.acao === 'dados') return json(Object.assign(base, { dados: dados(req.meses, conta) }));
     if (req.acao === 'relatorio') { pode('dashboard'); return json(Object.assign(base, { relatorio: relatorio(req.de, req.ate, conta) })); }
     if (req.acao === 'usuarios') { pode('usuarios'); return json(Object.assign(base, { equipe: equipe() })); }
+    if (req.acao === 'pendencias') { pode('pendencias'); return json(Object.assign(base, { pendencias: pendLista() })); }
     if (req.acao === 'nfVer') { algum(['historico_ver', 'registrar_entrada', 'dashboard']); return json(Object.assign(base, { foto: verArquivo(req.fotoId, pastaNF()) })); }
     if (req.acao === 'nfEnviar') { pode('registrar_entrada'); return json(Object.assign(base, { arquivo: nfEnviar(req, conta) })); }
     if (req.acao === 'osFotoVer') { algum(['os_ver', 'os_abrir', 'os_atender', 'os_gerenciar']); return json(Object.assign(base, { foto: verFoto(req.fotoId) })); }
@@ -210,12 +221,15 @@ function doPost(e) {
         case 'salvarUsuario': pode('usuarios'); msg = salvarUsuario(req, conta); extra.equipe = equipe(); break;
         case 'salvarPerfil': pode('usuarios'); msg = salvarPerfil(req); extra.equipe = equipe(); break;
         case 'excluirPerfil': pode('usuarios'); msg = excluirPerfil(req.nome); extra.equipe = equipe(); break;
+        case 'pendSalvar': pode('pendencias'); msg = pendSalvar(req.pend || {}, conta); extra.pendencias = true; break;
+        case 'pendExcluir': pode('pendencias'); msg = pendExcluir(req.id); extra.pendencias = true; break;
         default: throw falha('Ação desconhecida.');
       }
       SpreadsheetApp.flush();
     } finally {
       lock.releaseLock();
     }
+    if (extra.pendencias) return json(Object.assign(base, { msg, pendencias: pendLista() }));
     if (extra.equipe) return json(Object.assign(base, { msg }, extra));
     return json(Object.assign(base, { msg, dados: dados(req.meses, conta) }, extra));
   } catch (err) {
@@ -568,7 +582,8 @@ const PERMISSOES = [
   ['itens_editar', 'Editar itens', 'Editar, ajustar estoque e excluir itens', 'Cadastro'],
   ['historico_estornar', 'Estornar', 'Estornar lançamentos', 'Controle'],
   ['exportar', 'Exportar', 'Exportar planilhas', 'Controle'],
-  ['usuarios', 'Usuários', 'Gerenciar usuários e permissões', 'Controle']
+  ['usuarios', 'Usuários', 'Gerenciar usuários e permissões', 'Controle'],
+  ['pendencias', 'Pendências', 'Ver e atualizar o controle de pendências do síndico (menu Administração)', 'Administração']
 ];
 const PADRAO_MANUTENCAO = ['painel', 'itens_ver', 'historico_ver', 'registrar_saida', 'registrar_entrada',
   'registrar_troca', 'registrar_emprestimo', 'devolver', 'itens_cadastrar', 'os_ver', 'os_abrir', 'os_atender', 'dem_ver', 'dem_executar',
@@ -1625,10 +1640,181 @@ function autorizar() {
   tabela('os');
   tabela('dem');
   tabela('prev');
+  pendLista();
   abaPerfis();
   tabela('itens');
   const limpeza = garantirLimpeza();
-  Logger.log('Pronto: pastas de fotos e de notas fiscais, abas OS, Demandas e Preventivas, setores e permissões verificadas.' + limpeza);
+  Logger.log('Pronto: pastas de fotos e de notas fiscais, abas OS, Demandas, Preventivas e Pendencias, setores e permissões verificadas.' + limpeza);
+}
+
+// ---------- controle de pendências (menu Administração) ----------
+
+const PEND_SECOES = [
+  'Cotações e compras – aguardando entrega',
+  'Cotações e compras – a cotar',
+  'Cotações e compras – aguardando síndico',
+  'Governança / administração',
+  'Manutenção / limpeza / jardinagem',
+  'Outras demandas da administração'
+];
+const PEND_STATUS = ['Pendente', 'A cotar', 'Em andamento', 'Aguardando entrega', 'Aguardando síndico', 'Concluído'];
+
+// Lista do Sr. Fernando (e-mail de 13/10/2026), com os status do relatório de 14/10.
+// Entra na aba Pendencias uma única vez, na primeira vez que a aba é aberta.
+// [seção (posição em PEND_SECOES), nº, pendência, situação, observação]
+const PEND_INICIAIS = [
+  [0, "1", "Uniformes equipes Pier", "Concluído", ""],
+  [0, "2", "Capa TV para salinha e gourmet", "Concluído", ""],
+  [0, "3", "Carioca Geradores vs Trocar Diesel", "Em andamento", ""],
+  [0, "4", "Execução Maçaneta externa, Portões Piscina e Entradas dos blocos (Gil)", "Em andamento", "Previsão: quinta/sexta"],
+  [0, "5", "Entrega das Pedras de granito quebradas", "Em andamento", "Em confecção"],
+  [0, "6", "Bomba do chafariz", "Aguardando entrega", "Compra concluída"],
+  [1, "1", "8 novas lixeiras para a área da piscina", "A cotar", "Comprar após 13/10"],
+  [1, "2", "Lixeira grande com tampa para o lado da Máquina de Gelo", "A cotar", ""],
+  [1, "3", "3 Cotações para caixa de gordura", "A cotar", "Obter 3 cotações"],
+  [1, "4", "Tampa redonda para os corrimãos de alumínio do condomínio", "A cotar", ""],
+  [1, "5", "Tampas para as coberturas", "A cotar", ""],
+  [1, "6", "Refletores para a Quadra de areia", "A cotar", ""],
+  [1, "7", "Novo Ar-condicionado para Academia: 30.000 BTUs Inverter", "A cotar", ""],
+  [1, "8", "Cortina de Ar para academia", "A cotar", ""],
+  [1, "9", "Tinta marrom para o deck", "A cotar", ""],
+  [1, "10", "Repelente para dispensers", "A cotar", ""],
+  [1, "11", "Luminária para área de lavagem automotiva", "A cotar", ""],
+  [1, "12", "Tinta adequada para pintura da garagem", "A cotar", "Definir especificação"],
+  [2, "1", "Cotar Puxadores e troca dos trilhos e carrinhos das esquadrias da academia e Gourmet", "Aguardando síndico", ""],
+  [2, "2", "Placas de Sinalização de Aço", "Aguardando síndico", ""],
+  [2, "3", "Azuir x Troca da tela dos portões", "Aguardando síndico", ""],
+  [2, "4", "Azuir x Troca dos LEDs", "Aguardando síndico", ""],
+  [2, "5", "Azuir x Pintura da Base", "Aguardando síndico", ""],
+  [3, "1", "SecuryLarm vs Sirenes, Placas e Novas Câmeras", "Em andamento", ""],
+  [3, "2", "Investigação Caso Ovo/AR", "Em andamento", ""],
+  [3, "3", "Implementar check-list de curta temporada (Airbnb)", "Pendente", ""],
+  [3, "4", "Instalar todas as placas pendentes", "Em andamento", ""],
+  [3, "5", "Laudo de vazamento das garagens e apartamentos", "Pendente", "Verificar com o Eng. Marcos Mendes"],
+  [3, "6", "Ressarcimentos Franco Vieira", "Pendente", ""],
+  [3, "7", "Saída Garagem: Sinaleira", "Em andamento", ""],
+  [3, "8", "Saída Garagem: Placas de aviso aos pedestres", "Em andamento", ""],
+  [3, "9", "Saída Garagem: Espelho 180º", "A cotar", ""],
+  [3, "10", "Mastermed/Atenta Saúde – Rescindir Contrato", "Em andamento", ""],
+  [3, "11", "Placas imantadas para elevadores", "Em andamento", ""],
+  [3, "12", "Instalar novas películas das esteiras", "Em andamento", ""],
+  [3, "13", "Revisão Geral dos Ombrelones", "Em andamento", ""],
+  [3, "14", "Contagem de ombrelones aptos para uso", "Em andamento", ""],
+  [3, "15", "Novas placas: Ponto de Recarga Elétrica / Fezes do cão na lixeira / Guardar rodo após o uso", "Em andamento", ""],
+  [3, "16", "Notificação Alan – Portão Quebrado – Ressarcimento", "Em andamento", ""],
+  [3, "17", "Casos de Infiltração", "Em andamento", "Acompanhamento individual nos subitens"],
+  [3, "17.1", "Infiltração – Érica", "Em andamento", ""],
+  [3, "17.2", "Infiltração – Marcos", "Em andamento", ""],
+  [3, "17.3", "Infiltração – Alan", "Em andamento", "Já notificado"],
+  [3, "17.4", "Infiltração – Dona Mônica", "Pendente", "Aguardando confirmação da data para refazer a pintura do teto"],
+  [3, "17.5", "Infiltração – Fernanda (Bloco 7)", "Em andamento", ""],
+  [3, "17.6", "Infiltração – Dani (Bloco 5)", "Concluído", ""],
+  [3, "18", "Regularização da piscina", "Em andamento", ""],
+  [3, "19", "Aplicar Check-List diário do supervisor e Auxiliar", "Em andamento", ""],
+  [3, "20", "Regularizar a conta do Mercado Livre", "Pendente", ""],
+  [3, "21", "Leila vs Kombis e Contrato de Locação da unidade", "Pendente", "Pendente de definição"],
+  [3, "22", "Náutica vs Lista de associados", "Pendente", ""],
+  [3, "23", "Sergio de Moura vs infiltração varanda", "Pendente", ""],
+  [4, "", "Vazamento jardim entre blocos 5 e 3-4", "Pendente", ""],
+  [4, "1", "Instalar placas da SecuryLarm", "Pendente", "Definição dos ambientes"],
+  [4, "2", "Finalizar pintura do Muro saída de Carros", "Em andamento", ""],
+  [4, "3", "Pintura da Demarcação das vagas da Garagem, incluindo área de visitantes", "Em andamento", "Haverá nova alteração de cor"],
+  [4, "4", "Calhas na garagem vazando", "Pendente", ""],
+  [4, "5", "Rejuntes e rebocos descascando na Garagem", "Em andamento", "Raspagem já iniciada"],
+  [4, "6", "Vedação dos pontos de buraco do muro de pedra do 5/101", "Em andamento", ""],
+  [4, "7", "Vedação das juntas de dilatação horizontal ao longo do 5/101", "Em andamento", ""],
+  [4, "8", "Vedação das juntas de dilatação no condomínio", "Pendente", ""],
+  [4, "9", "Avaliar pragas nas plantas e na árvore grande do jardim", "Concluído", ""],
+  [4, "10", "Refazer paredes e rodapés nas entradas dos blocos", "Em andamento", ""],
+  [4, "11", "Limpar limo no meio-fio ao longo dos jardins", "Em andamento", ""],
+  [4, "12", "Limpar Tampo do Futmesa", "Pendente", "A cola não sai; substituir o adesivo"],
+  [4, "13", "Verificar corrosão da estrutura do deck", "Concluído", ""],
+  [4, "14", "Instalar pingadeiras nas pedras das fachadas", "Pendente", ""],
+  [4, "15", "Iluminação para as palmeiras externas", "Em andamento", "Faltam apenas os blocos 1 e 2"],
+  [4, "16", "Manutenção da Academia – Equipamentos quebrados", "Pendente", "Verificar responsabilidade da Residence Fitness"],
+  [4, "17", "Instalar novos refletores na área da lavagem automotiva com disjuntor/interruptor dedicado", "Aguardando entrega", ""],
+  [4, "18", "Refazer Quadro da Sauna", "Pendente", ""],
+  [4, "19", "Terminar de raspar piso da área comum com o disco de aço", "Em andamento", "Concluído nas áreas atendidas; verificar outros pontos"],
+  [4, "20", "Força-tarefa de organização geral da garagem: fiação solta, estruturas obsoletas, lixo/entulho, limpeza de tubulações, grades e esquadrias", "Em andamento", "Limpeza executada; falta revisão geral"],
+  [4, "21", "Pintura dos tubos PVC abaixo do deck de marrom", "Pendente", "Aguardando compra da tinta"]
+];
+
+function pendLista() {
+  const t = tabela('pend');
+  let lista = linhas(t);
+  if (!lista.length && pendSemear(t)) lista = linhas(t);
+  return lista
+    .map(p => ({ id: p.id, secao: p.secao, numero: p.numero, titulo: p.titulo, status: p.status, responsavel: p.responsavel,
+      prazo: p.prazo, obs: p.obs, ordem: p.ordem, atualizadoEm: p.atualizadoEm, atualizadoPor: p.atualizadoPor }))
+    .sort((a, b) => (Number(a.ordem) || 1e9) - (Number(b.ordem) || 1e9));
+}
+
+function pendSemear(t) {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('PEND_SEMEADA')) return false;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    if (props.getProperty('PEND_SEMEADA') || t.sh.getLastRow() > 1) return false;
+    const quando = '2026-10-14 06:50';
+    const conta = {};
+    const vals = PEND_INICIAIS.map((x, i) => {
+      conta[x[0]] = (conta[x[0]] || 0) + 1;
+      const o = { id: 'pd' + ('00' + (i + 1)).slice(-3), secao: PEND_SECOES[x[0]], numero: x[1], titulo: x[2], status: x[3],
+        responsavel: '', prazo: '', obs: x[4], ordem: x[0] * 1000 + conta[x[0]], atualizadoEm: quando, atualizadoPor: 'Relatório de 14/10' };
+      const r = new Array(t.ncol).fill('');
+      t.def.cols.forEach(([k]) => { r[t.idx[k]] = k === 'ordem' ? o[k] : String(o[k]); });
+      return r;
+    });
+    const rng = t.sh.getRange(2, 1, vals.length, t.ncol);
+    rng.setNumberFormat('@');
+    t.sh.getRange(2, t.idx.ordem + 1, vals.length, 1).setNumberFormat('General');
+    rng.setValues(vals);
+    props.setProperty('PEND_SEMEADA', hoje());
+    SpreadsheetApp.flush();
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function pendSalvar(v, conta) {
+  const t = tabela('pend');
+  const todas = linhas(t);
+  const id = texto(v.id, 40);
+  const atual = id ? todas.find(p => p.id === id) : null;
+  if (id && !atual) throw falha('Esta pendência não existe mais. Atualize a tela.');
+  const obj = { atualizadoEm: agora(), atualizadoPor: conta.nome };
+  if ('titulo' in v) { obj.titulo = texto(v.titulo, 300); if (!obj.titulo) throw falha('Descreva a pendência.'); }
+  if ('status' in v) { if (PEND_STATUS.indexOf(v.status) < 0) throw falha('Situação inválida.'); obj.status = v.status; }
+  if ('responsavel' in v) obj.responsavel = texto(v.responsavel, 60);
+  if ('prazo' in v) obj.prazo = /^\d{4}-\d{2}-\d{2}$/.test(String(v.prazo || '')) ? String(v.prazo) : '';
+  if ('obs' in v) obj.obs = texto(v.obs, 1000);
+  if (atual) {
+    gravar(t, obj, atual._row);
+    return obj.status ? 'Situação: ' + obj.status + '.' : 'Salvo.';
+  }
+  const secao = PEND_SECOES.indexOf(v.secao) >= 0 ? v.secao : PEND_SECOES[PEND_SECOES.length - 1];
+  if (!obj.titulo) throw falha('Descreva a pendência.');
+  const daSecao = todas.filter(p => p.secao === secao);
+  const nums = daSecao.map(p => parseInt(String(p.numero).split('.')[0], 10)).filter(n => !isNaN(n));
+  const base = PEND_SECOES.indexOf(secao) * 1000;
+  Object.assign(obj, {
+    id: novoId('pd'), secao,
+    numero: String((nums.length ? Math.max.apply(null, nums) : 0) + 1),
+    status: obj.status || 'Pendente', responsavel: obj.responsavel || '', prazo: obj.prazo || '', obs: obj.obs || '',
+    ordem: Math.max.apply(null, [base].concat(daSecao.map(p => Number(p.ordem) || 0))) + 1
+  });
+  gravar(t, obj);
+  return 'Pendência ' + obj.numero + ' adicionada.';
+}
+
+function pendExcluir(id) {
+  const t = tabela('pend');
+  const p = linhas(t).find(x => x.id === texto(id, 40));
+  if (!p) throw falha('Esta pendência já foi excluída.');
+  t.sh.deleteRow(p._row);
+  return 'Pendência excluída.';
 }
 
 function celula(v, isNum) {

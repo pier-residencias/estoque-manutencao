@@ -53,6 +53,16 @@ O botão **Avisar no WhatsApp** abre o WhatsApp com a mensagem pronta e o link d
 
 Os dados ficam nas abas **Demandas** e **Preventivas** da planilha. As permissões Ver, Executar e Delegar demandas ficam na aba **Perfis**.
 
+## Menu Administração
+
+No fim da barra de abas fica o menu suspenso **Administração ▾** (no celular, **Adm. ▾**), com as telas que são só da administração. Ele aparece apenas para perfis com pelo menos uma permissão do grupo **Administração** na aba **Perfis**; o perfil Administração tem todas. Para pôr uma tela nova no menu: um botão com `data-adm-tab` em `#adm-menu` (index.html), a aba em `ABAS_PERM` e `ABAS_ADM` (app.js) e a permissão em `PERMISSOES`, grupo `'Administração'` (Codigo.gs).
+
+### Controle de pendências
+
+Em **Administração → Controle de pendências** fica a lista de pendências cobrada pelo síndico, dividida nas mesmas seções do e-mail dele. Em cada linha dá para mudar a situação (Pendente, A cotar, Em andamento, Aguardando entrega, Aguardando síndico, Concluído), o responsável, o prazo e a observação; tudo é gravado na hora na aba **Pendencias** da planilha, com quem alterou e quando. Prazo vencido fica em vermelho. Há busca, filtros, resumo por situação, **+ Adicionar item** em cada seção (a seção **Outras demandas da administração** é para o que a administração toca e não está na lista do síndico) e o botão **Gerar texto para e-mail**, que monta o status de tudo no formato do e-mail do síndico para colar no corpo da resposta.
+
+A permissão é **Pendências** (grupo Administração). Na primeira vez que a aba Pendencias é aberta, ela recebe os 74 itens da lista de 13/10/2026 com a situação do relatório de 14/10; isso acontece uma vez só.
+
 ## Nota fiscal das compras
 
 Em **Registrar → Entrada**, o campo **Foto da nota fiscal** anexa a foto (ou o PDF) da nota da compra, até 4 arquivos. Os arquivos ficam na pasta "Notas fiscais - Pier Gestão" no Drive, ao lado da planilha, e o link vai na coluna **Foto da NF** da aba Movimentacoes. Para lançar outros itens da mesma nota, o fornecedor e o número continuam preenchidos e a mesma foto vai junto, sem enviar de novo. No **Histórico**, o link **ver nota** abre o arquivo.

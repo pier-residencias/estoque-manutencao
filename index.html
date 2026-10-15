@@ -47,7 +47,8 @@
   </div>
 </header>
 <nav class="tabs" aria-label="Seções">
-  <div class="wrap" role="tablist">
+  <div class="wrap">
+   <div class="tabscroll" role="tablist">
     <button role="tab" data-tab="painel" aria-selected="true">Painel</button>
     <button role="tab" data-tab="demandas" aria-selected="false">Demandas <span class="badge" id="b-dem">0</span></button>
     <button role="tab" data-tab="os" aria-selected="false">OS <span class="badge" id="b-os">0</span></button>
@@ -57,6 +58,12 @@
     <button role="tab" data-tab="emprestimos" aria-selected="false">Empréstimos <span class="badge" id="b-emp">0</span></button>
     <button role="tab" data-tab="dashboard" aria-selected="false">Dashboard</button>
     <button role="tab" data-tab="usuarios" aria-selected="false">Usuários</button>
+   </div>
+    <button type="button" class="admbtn" id="tab-adm" aria-haspopup="true" aria-expanded="false" aria-controls="adm-menu" hidden aria-label="Administração"><span class="lbl-l">Administração</span><span class="lbl-c" aria-hidden="true">Adm.</span> <span class="car" aria-hidden="true">▾</span></button>
+  </div>
+  <div class="admmenu" id="adm-menu" role="menu" aria-label="Administração" hidden>
+    <div class="mh">Somente administração</div>
+    <button type="button" role="menuitem" data-adm-tab="pendencias"><b>Controle de pendências</b><span>Lista do síndico: situação, responsável e prazo</span></button>
   </div>
 </nav>
 
@@ -412,6 +419,22 @@
       <p class="cap">Cada colaborador recebe um perfil. O perfil Administração sempre tem acesso a tudo.</p>
       <div class="tablebox flat"><table class="matriz" id="q-matriz"></table></div>
     </div>
+  </section>
+
+  <!-- PENDÊNCIAS (menu Administração) -->
+  <section id="t-pendencias" hidden>
+    <div class="sec-head"><h2 class="sec">Controle de pendências</h2><span class="muted">Lista do Sr. Fernando. Cada alteração vai direto para a aba Pendencias da planilha.</span></div>
+    <div class="pd-stats" id="pd-stats"></div>
+    <div class="pd-prog"><span class="track"><i id="pd-bar"></i></span><span id="pd-prog">Carregando…</span></div>
+    <div class="toolbar">
+      <input class="input" id="pd-q" type="search" placeholder="Buscar pendência, observação ou responsável">
+      <select class="input" id="pd-fs" aria-label="Filtrar por situação"></select>
+      <select class="input" id="pd-fr" aria-label="Filtrar por responsável"></select>
+      <label class="pd-chk"><input type="checkbox" id="pd-hide"> Ocultar concluídas</label>
+      <button class="btn primary" type="button" id="pd-mail">Gerar texto para e-mail</button>
+    </div>
+    <div id="pd-body"><div class="empty">Carregando pendências…</div></div>
+    <datalist id="pd-resps"><option value="Gerência"></option><option value="Supervisor"></option><option value="Auxiliar"></option><option value="Síndico"></option><option value="Fornecedor"></option></datalist>
   </section>
 </main>
 

@@ -28,14 +28,14 @@ const S = {
   tab:"painel", tipo:"saida", picked:null, iStatus:"", hTipo:"", histMes:mesDe(), ocupado:false, ultima:null,
   os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null, nfLida:null,
   iPer:{tipo:"", modo:"mes", mes:mesDe(), dia:hoje()}, mesesCarregados:[],
-  setores:["Manutenção"], setor:"Manutenção", empTodos:[], locais:{}
+  setores:["Manutenção"], setor:"Manutenção", empTodos:[], locais:{}, pend:null
 };
 const setorDe = x => (x && x.setor) || "Manutenção";
 const SETORES_PERM = [["Manutenção","setor_manutencao"],["Limpeza","setor_limpeza"]];
 const setoresDasPerms = p => { const l = SETORES_PERM.filter(x => p && p[x[1]]).map(x => x[0]); return l.length ? l : ["Manutenção"]; };
 const doSetor = x => setorDe(x) === S.setor;
 const can = p => !!(S.perms && S.perms[p]);
-const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"]};
+const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"], pendencias:["pendencias"]};
 const podeAba = t => (ABAS_PERM[t]||[]).some(can);
 const primeiraAba = () => Object.keys(ABAS_PERM).find(podeAba) || "painel";
 const movsDoMes = ym => S.movs.filter(m => String(m.data).slice(0,7) === ym && doSetor(m));
@@ -113,7 +113,7 @@ function mostrarLogin(msg){
   $("#l-msg").textContent = msg || ""; $("#l-msg").className = msg ? "hint err" : "hint";
   ($("#l-usuario").value ? $("#l-senha") : $("#l-usuario")).focus();
 }
-function sair(msg){ S.senha = ""; S.perms = {}; S.rel = null; S.eq = null; apagarSessao(); mostrarLogin(msg); }
+function sair(msg){ S.senha = ""; S.perms = {}; S.rel = null; S.eq = null; S.pend = null; apagarSessao(); abrirMenuAdm(false); mostrarLogin(msg); }
 $("#f-login").addEventListener("submit", async ev => {
   ev.preventDefault();
   const usuario = $("#l-usuario").value.trim().toLowerCase(), senha = $("#l-senha").value.trim(), msg = $("#l-msg");
@@ -149,16 +149,43 @@ function renderMe(){
 function setTab(t){
   if (S.senha && !podeAba(t)) t = primeiraAba();
   S.tab = t;
-  $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===t ? "true":"false"));
+  $$("nav.tabs .tabscroll > button[data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===t ? "true":"false"));
+  $("#tab-adm").classList.toggle("on", ABAS_ADM.includes(t));
+  $$("#adm-menu [data-adm-tab]").forEach(b => { if (b.dataset.admTab===t) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current"); });
   $$("main > section").forEach(s => s.hidden = s.id !== "t-"+t);
   renderSetorSel();
   renderAll();
   if (t==="dashboard") carregarDashboard();
   if (t==="usuarios") carregarEquipe();
+  if (t==="pendencias") carregarPend();
   window.scrollTo({top:0});
   try{ history.replaceState(null,"","#"+t); }catch(e){}
 }
-$$("nav.tabs button").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+$$("nav.tabs .tabscroll > button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+
+// ---------- menu Administração ----------
+const ABAS_ADM = ["pendencias"];
+function abrirMenuAdm(abrir){
+  const btn = $("#tab-adm"), menu = $("#adm-menu");
+  if (!abrir) { if (!menu.hidden) { menu.hidden = true; btn.setAttribute("aria-expanded","false"); } return; }
+  const nav = $("nav.tabs").getBoundingClientRect(), r = btn.getBoundingClientRect();
+  menu.hidden = false;
+  const w = menu.offsetWidth;
+  menu.style.left = Math.max(16, Math.min(r.right - nav.left - w, nav.width - w - 16)) + "px";
+  btn.setAttribute("aria-expanded","true");
+  const first = menu.querySelector("button:not([hidden])"); if (first) first.focus();
+}
+$("#tab-adm").addEventListener("click", e => { e.stopPropagation(); abrirMenuAdm($("#adm-menu").hidden); });
+$("#adm-menu").addEventListener("click", e => { const b = e.target.closest("[data-adm-tab]"); if (!b) return; abrirMenuAdm(false); setTab(b.dataset.admTab); });
+$("#adm-menu").addEventListener("keydown", e => {
+  const items = $$("#adm-menu button:not([hidden])"), i = items.indexOf(document.activeElement);
+  if (e.key==="ArrowDown") { e.preventDefault(); items[(i+1)%items.length].focus(); }
+  else if (e.key==="ArrowUp") { e.preventDefault(); items[(i-1+items.length)%items.length].focus(); }
+  else if (e.key==="Escape" || e.key==="Tab") { abrirMenuAdm(false); if (e.key==="Escape") $("#tab-adm").focus(); }
+});
+document.addEventListener("click", e => { if (!e.target.closest("#adm-menu") && !e.target.closest("#tab-adm")) abrirMenuAdm(false); });
+window.addEventListener("resize", () => abrirMenuAdm(false));
+$("nav.tabs .tabscroll").addEventListener("scroll", () => abrirMenuAdm(false), {passive:true});
 $$(".kpi").forEach(k => k.addEventListener("click", () => {
   if (k.dataset.filter) { S.iStatus = k.dataset.filter; syncChips("#i-status","s",S.iStatus); }
   setTab(k.dataset.go);
@@ -693,6 +720,7 @@ function renderAll(){
   if (S.tab==="dashboard") renderDash();
   if (S.tab==="os") renderOS();
   if (S.tab==="demandas") renderDem();
+  if (S.tab==="pendencias") renderPend();
   renderAvisoDem();
   renderOsRef();
   renderPicked();
@@ -700,7 +728,10 @@ function renderAll(){
 
 // ---------- permissões na tela ----------
 function aplicarPermissoes(){
-  $$("nav.tabs button").forEach(b => b.hidden = !podeAba(b.dataset.tab));
+  $$("nav.tabs .tabscroll > button[data-tab]").forEach(b => b.hidden = !podeAba(b.dataset.tab));
+  $$("#adm-menu [data-adm-tab]").forEach(b => b.hidden = !podeAba(b.dataset.admTab));
+  $("#tab-adm").hidden = !ABAS_ADM.some(podeAba);
+  if ($("#tab-adm").hidden) abrirMenuAdm(false);
   const tipos = {saida:"registrar_saida", entrada:"registrar_entrada", troca:"registrar_troca", emprestimo:"registrar_emprestimo"};
   $$("#seg button").forEach(b => b.hidden = !can(tipos[b.dataset.tipo]));
   if (!can(tipos[S.tipo])) { const t = Object.keys(tipos).find(k => can(tipos[k])); if (t) setTipo(t); }
@@ -2355,6 +2386,234 @@ function abrirImportacao(){
   });
 }
 $("#i-importar").addEventListener("click", abrirImportacao);
+
+// ---------- controle de pendências (menu Administração) ----------
+const PD_SECOES = [
+  {nome:"Cotações e compras – aguardando entrega", email:"COTAÇÕES E COMPRAS – AGUARDANDO ENTREGA"},
+  {nome:"Cotações e compras – a cotar", email:"COTAÇÕES E COMPRAS – A COTAR"},
+  {nome:"Cotações e compras – aguardando síndico", email:"COTAÇÕES E COMPRAS – AGUARDANDO SÍNDICO"},
+  {nome:"Governança / administração", email:"GOVERNANÇA / ADMINISTRAÇÃO"},
+  {nome:"Manutenção / limpeza / jardinagem", email:"MANUTENÇÃO / LIMPEZA / JARDINAGEM"},
+  {nome:"Outras demandas da administração", email:"OUTRAS DEMANDAS DA ADMINISTRAÇÃO"}
+];
+const PD_OUTRAS = PD_SECOES[PD_SECOES.length-1].nome;
+const PD_STATUS = ["Pendente","A cotar","Em andamento","Aguardando entrega","Aguardando síndico","Concluído"];
+const PD = { rows:new Map(), secs:new Map(), timers:new Map(), fila:Promise.resolve(), salvando:0, q:"", st:"", resp:"", hide:false, late:false, carregando:false };
+try { const f = JSON.parse(localStorage.getItem("pd-filtros")||"{}"); ["q","st","resp","hide"].forEach(k => { if (k in f) PD[k] = f[k]; }); } catch(e){}
+const pdGuardarFiltros = () => { try { localStorage.setItem("pd-filtros", JSON.stringify({q:PD.q, st:PD.st, resp:PD.resp, hide:PD.hide})); } catch(e){} };
+const pdSecaoDe = p => PD_SECOES.some(s => s.nome === p.secao) ? p.secao : PD_OUTRAS;
+const pdAtrasada = p => p.prazo && p.status !== "Concluído" && p.prazo < hoje();
+const pdLista = () => (S.pend || []).slice().sort((a,b) => (Number(a.ordem)||9e9) - (Number(b.ordem)||9e9));
+const pdAchar = id => (S.pend || []).find(p => p.id === id);
+const pdEl = (tag, attrs={}, kids=[]) => { const n = document.createElement(tag); for (const [k,v] of Object.entries(attrs)) { if (k==="class") n.className = v; else if (k==="text") n.textContent = v; else n.setAttribute(k, v); } for (const x of [].concat(kids)) if (x != null) n.append(x); return n; };
+const pdAuto = t => { t.style.height = "auto"; t.style.height = t.scrollHeight + "px"; };
+
+async function carregarPend(){
+  if (!can("pendencias") || PD.carregando) return;
+  PD.carregando = true;
+  try { const r = await api("pendencias"); if (!PD.salvando) S.pend = r.pendencias || []; renderPend(); }
+  catch(e){ if (!S.pend) $("#pd-body").innerHTML = `<div class="notice crit">${esc(e.message)}</div>`; toast(e.message, true); }
+  finally { PD.carregando = false; }
+}
+// gravações uma de cada vez, na ordem em que foram feitas
+function pdEnviar(acao, extra, aoConcluir){
+  PD.salvando++;
+  S.ocupado = true; renderSync();
+  const p = PD.fila.then(async () => {
+    try {
+      const r = await api(acao, extra);
+      if (aoConcluir) aoConcluir(r);
+      if (PD.salvando === 1) { S.pend = r.pendencias || S.pend; }
+      toast(r.msg || "Salvo.");
+      return r;
+    } catch(e){ toast(e.message, true); if (PD.salvando === 1) setTimeout(carregarPend, 300); return null; }
+    finally { PD.salvando--; if (!PD.salvando) { S.ocupado = false; renderSync(); renderPend(); } }
+  });
+  PD.fila = p.catch(() => null);
+  return p;
+}
+function pdSalvar(id, patch){
+  const p = pdAchar(id); if (p) Object.assign(p, patch);
+  return pdEnviar("pendSalvar", {pend:Object.assign({id}, patch)});
+}
+function pdSalvarDepois(id, campo, valor){
+  const k = id + ":" + campo; clearTimeout(PD.timers.get(k));
+  const p = pdAchar(id); if (p) p[campo] = valor;
+  PD.timers.set(k, setTimeout(() => { PD.timers.delete(k); pdSalvar(id, {[campo]:valor}); }, 800));
+}
+
+function pdFiltros(){
+  const fs = $("#pd-fs");
+  if (!fs.options.length) fs.innerHTML = `<option value="">Todas as situações</option>` + PD_STATUS.map(s => `<option>${esc(s)}</option>`).join("");
+  fs.value = PD.st;
+  const resps = [...new Set(pdLista().map(p => (p.responsavel||"").trim()).filter(Boolean))].sort((a,b) => a.localeCompare(b,"pt-BR"));
+  const fr = $("#pd-fr");
+  fr.innerHTML = `<option value="">Todos os responsáveis</option><option value="__sem">Sem responsável</option>` + resps.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("");
+  fr.value = [...fr.options].some(o => o.value === PD.resp) ? PD.resp : "";
+  if (document.activeElement !== $("#pd-q")) $("#pd-q").value = PD.q;
+  $("#pd-hide").checked = PD.hide;
+}
+function pdPassa(p){
+  if (PD.hide && p.status === "Concluído") return false;
+  if (PD.st && p.status !== PD.st) return false;
+  const r = (p.responsavel||"").trim();
+  if (PD.resp === "__sem" && r) return false;
+  if (PD.resp && PD.resp !== "__sem" && r !== PD.resp) return false;
+  if (PD.late && !pdAtrasada(p)) return false;
+  if (PD.q && !norm([p.numero, p.titulo, p.obs, p.responsavel].join(" ")).includes(norm(PD.q))) return false;
+  return true;
+}
+function pdResumo(){
+  const all = pdLista(), n = s => all.filter(p => p.status === s).length;
+  const feitas = n("Concluído"), atrasadas = all.filter(pdAtrasada).length;
+  const itens = [
+    {l:"pendências", v:all.length, st:""}, {l:"em andamento", v:n("Em andamento"), st:"Em andamento"},
+    {l:"aguardando entrega", v:n("Aguardando entrega"), st:"Aguardando entrega"}, {l:"aguardando síndico", v:n("Aguardando síndico"), st:"Aguardando síndico"},
+    {l:"a cotar", v:n("A cotar"), st:"A cotar"}, {l:"pendentes", v:n("Pendente"), st:"Pendente"},
+    {l:"concluídas", v:feitas, st:"Concluído"}, {l:"atrasadas", v:atrasadas, st:"", late:true}
+  ];
+  $("#pd-stats").innerHTML = itens.map((it,i) => `<button type="button" class="pd-stat ${it.late?"late":""}" data-i="${i}" aria-pressed="${(it.late ? PD.late : (!PD.late && PD.st===it.st && (i>0 || !PD.st))) ? "true" : "false"}"><b>${it.v}</b><span>${esc(it.l)}</span></button>`).join("");
+  $$("#pd-stats .pd-stat").forEach(b => b.onclick = () => { const it = itens[+b.dataset.i]; PD.st = it.st; PD.late = !!it.late; if (it.st === "Concluído") PD.hide = false; pdGuardarFiltros(); renderPend(); });
+  const pct = all.length ? Math.round(feitas/all.length*100) : 0;
+  $("#pd-bar").style.width = pct + "%";
+  $("#pd-prog").textContent = all.length ? `${feitas} de ${all.length} concluídas (${pct}%)` + (PD.late ? " · mostrando só as atrasadas" : "") : "Nenhuma pendência cadastrada";
+}
+function pdLinha(id){
+  const f = {};
+  f.num = pdEl("div", {class:"pd-num"});
+  f.tit = pdEl("textarea", {class:"pd-tit", rows:"1", "aria-label":"Pendência", id:"pdt-"+id});
+  f.obs = pdEl("textarea", {class:"pd-obs", rows:"1", placeholder:"Adicionar observação", "aria-label":"Observação", id:"pdo-"+id});
+  f.meta = pdEl("div", {class:"pd-meta"});
+  f.st = pdEl("select", {class:"input pd-st", "aria-label":"Situação", id:"pds-"+id});
+  f.st.innerHTML = PD_STATUS.map(s => `<option>${esc(s)}</option>`).join("");
+  f.resp = pdEl("input", {class:"input", list:"pd-resps", placeholder:"Responsável", "aria-label":"Responsável", id:"pdr-"+id});
+  f.prazo = pdEl("input", {class:"input pd-prazo", type:"date", "aria-label":"Prazo", id:"pdp-"+id});
+  f.del = pdEl("button", {class:"pd-del", type:"button", title:"Excluir pendência", "aria-label":"Excluir pendência", text:"×"});
+  f.tit.addEventListener("input", () => { pdAuto(f.tit); if (f.tit.value.trim()) pdSalvarDepois(id, "titulo", f.tit.value.trim()); });
+  f.obs.addEventListener("input", () => { pdAuto(f.obs); pdSalvarDepois(id, "obs", f.obs.value); });
+  f.st.addEventListener("change", () => { f.st.dataset.s = f.st.value; pdSalvar(id, {status:f.st.value}); });
+  f.resp.addEventListener("input", () => pdSalvarDepois(id, "responsavel", f.resp.value.trim()));
+  f.prazo.addEventListener("change", () => pdSalvar(id, {prazo:f.prazo.value}));
+  f.del.addEventListener("click", () => pdConfirmar(id));
+  const el = pdEl("div", {class:"pd-row"}, [
+    f.num, pdEl("div", {class:"pd-main"}, [f.tit, f.obs, f.meta]),
+    pdEl("div", {class:"c-st"}, [pdEl("div", {class:"pd-lbl", text:"Situação"}), f.st]),
+    pdEl("div", {class:"c-resp"}, [pdEl("div", {class:"pd-lbl", text:"Responsável"}), f.resp]),
+    pdEl("div", {class:"c-prazo"}, [pdEl("div", {class:"pd-lbl", text:"Prazo"}), f.prazo]),
+    pdEl("div", {class:"c-del"}, [f.del])
+  ]);
+  const r = {el, f}; PD.rows.set(id, r); return r;
+}
+const pdPor = (inp, v) => { if (document.activeElement !== inp && inp.value !== v) inp.value = v; };
+function pdAtualizar(p){
+  const r = PD.rows.get(p.id) || pdLinha(p.id), f = r.f;
+  f.num.textContent = p.numero || "—";
+  pdPor(f.tit, p.titulo||""); pdPor(f.obs, p.obs||""); pdPor(f.resp, p.responsavel||""); pdPor(f.prazo, p.prazo||"");
+  if (document.activeElement !== f.st) { f.st.value = PD_STATUS.includes(p.status) ? p.status : "Pendente"; f.st.dataset.s = f.st.value; }
+  f.meta.textContent = p.atualizadoEm ? `Atualizado em ${fData(p.atualizadoEm)} ${String(p.atualizadoEm).slice(11,16)}${p.atualizadoPor ? " por "+p.atualizadoPor : ""}` : "";
+  r.el.classList.toggle("done", p.status === "Concluído");
+  r.el.classList.toggle("late", !!pdAtrasada(p));
+  r.el.classList.toggle("sub", String(p.numero||"").includes("."));
+  return r.el;
+}
+function pdConfirmar(id){
+  const r = PD.rows.get(id); if (!r || r.el.querySelector(".pd-conf")) return;
+  const p = pdAchar(id) || {};
+  const box = pdEl("div", {class:"pd-conf"}, [pdEl("span", {text:`Excluir "${String(p.titulo||"esta pendência").slice(0,60)}"?`})]);
+  const sim = pdEl("button", {class:"btn small danger", type:"button", text:"Sim, excluir"});
+  const nao = pdEl("button", {class:"btn small", type:"button", text:"Manter"});
+  sim.onclick = () => { sim.disabled = true; pdEnviar("pendExcluir", {id}).then(res => { if (!res) box.remove(); }); };
+  nao.onclick = () => box.remove();
+  box.append(sim, nao); r.el.append(box);
+}
+function pdSecao(s){
+  const list = pdEl("div", {class:"pd-list"}), cnt = pdEl("span", {class:"cnt"}), bar = pdEl("i");
+  const add = pdEl("button", {class:"btn small", type:"button", text:"+ Adicionar item"});
+  const sec = pdEl("section", {class:"pd-sec"}, [pdEl("div", {class:"sh"}, [pdEl("h3", {text:s.nome}), cnt, pdEl("span", {class:"sbar", "aria-hidden":"true"}, [bar]), add]), list]);
+  add.onclick = () => pdNovo(s.nome);
+  const o = {sec, list, cnt, bar, vazio:pdEl("div", {class:"empty"})}; PD.secs.set(s.nome, o); return o;
+}
+function pdNovo(secao){
+  const o = PD.secs.get(secao); const ja = o.list.querySelector(".pd-new"); if (ja) { ja.querySelector("input").focus(); return; }
+  const inp = pdEl("input", {class:"input", placeholder:"Descreva a nova pendência", "aria-label":"Nova pendência", id:"pdn-"+PD_SECOES.findIndex(s => s.nome === secao)});
+  const ok = pdEl("button", {class:"btn small primary", type:"submit", text:"Adicionar"});
+  const cancelar = pdEl("button", {class:"btn small", type:"button", text:"Cancelar"});
+  const form = pdEl("form", {class:"pd-new"}, [inp, ok, cancelar]);
+  cancelar.onclick = () => form.remove();
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    const titulo = inp.value.trim(); if (!titulo) { inp.focus(); return; }
+    ok.disabled = true;
+    pdEnviar("pendSalvar", {pend:{secao, titulo}}).then(res => { if (res) form.remove(); else ok.disabled = false; });
+  });
+  o.list.prepend(form); inp.focus();
+}
+function renderPend(){
+  if (!can("pendencias") || !S.pend) return;
+  pdFiltros(); pdResumo();
+  const body = $("#pd-body");
+  if (!PD.secs.size) { body.textContent = ""; PD_SECOES.forEach(s => body.append(pdSecao(s).sec)); }
+  const all = pdLista(), filtro = !!(PD.q || PD.st || PD.resp || PD.hide || PD.late);
+  for (const s of PD_SECOES) {
+    const o = PD.secs.get(s.nome);
+    const daSecao = all.filter(p => pdSecaoDe(p) === s.nome);
+    const vis = daSecao.filter(pdPassa);
+    const feitas = daSecao.filter(p => p.status === "Concluído").length;
+    o.cnt.textContent = daSecao.length ? `${feitas}/${daSecao.length} concluídas` : "sem itens";
+    o.bar.style.width = (daSecao.length ? feitas/daSecao.length*100 : 0) + "%";
+    o.sec.hidden = filtro && !vis.length;
+    const quero = vis.map(pdAtualizar);
+    const agora = [...o.list.children].filter(c => c.classList.contains("pd-row"));
+    if (!(agora.length === quero.length && agora.every((c,i) => c === quero[i]))) {
+      const form = o.list.querySelector(".pd-new");
+      o.list.textContent = ""; if (form) o.list.append(form); quero.forEach(w => o.list.append(w));
+    }
+    if (!quero.length) { o.vazio.textContent = s.nome === PD_OUTRAS ? "Inclua aqui as demandas que a administração já está tocando e que não estão na lista do síndico." : "Nenhum item."; if (!o.vazio.isConnected) o.list.append(o.vazio); }
+    else if (o.vazio.isConnected) o.vazio.remove();
+  }
+  for (const id of [...PD.rows.keys()]) if (!pdAchar(id)) { PD.rows.get(id).el.remove(); PD.rows.delete(id); }
+  requestAnimationFrame(() => $$("#pd-body .pd-tit, #pd-body .pd-obs").forEach(pdAuto));
+}
+function pdTextoEmail(){
+  const all = pdLista(), L = ["Prezado Sr. Fernando,", "", "Segue o status atualizado das pendências:", ""];
+  for (const s of PD_SECOES) {
+    const daSecao = all.filter(p => pdSecaoDe(p) === s.nome); if (!daSecao.length) continue;
+    L.push(s.email);
+    for (const p of daSecao) {
+      const sub = String(p.numero||"").includes(".");
+      let ln = (sub ? "    • " : p.numero ? p.numero + ". " : "• ") + String(p.titulo||"").trim() + " – " + (p.status || "Pendente");
+      const x = [];
+      if (String(p.obs||"").trim()) x.push(String(p.obs).trim());
+      if (p.prazo && p.status !== "Concluído") x.push("prazo " + fData(p.prazo).slice(0,5));
+      if (String(p.responsavel||"").trim()) x.push("resp.: " + String(p.responsavel).trim());
+      if (x.length) ln += " (" + x.join("; ") + ")";
+      L.push(ln);
+    }
+    L.push("");
+  }
+  L.push("Fico à disposição.", "", "Atenciosamente,", S.nome || "");
+  return L.join("\n");
+}
+$("#pd-q").addEventListener("input", e => { PD.q = e.target.value.trim(); PD.late = false; pdGuardarFiltros(); renderPend(); });
+$("#pd-fs").addEventListener("change", e => { PD.st = e.target.value; PD.late = false; pdGuardarFiltros(); renderPend(); });
+$("#pd-fr").addEventListener("change", e => { PD.resp = e.target.value; pdGuardarFiltros(); renderPend(); });
+$("#pd-hide").addEventListener("change", e => { PD.hide = e.target.checked; pdGuardarFiltros(); renderPend(); });
+$("#pd-mail").addEventListener("click", () => {
+  if (!S.pend) return;
+  $("#modal-box").classList.add("largo");
+  $("#modal-box").innerHTML = `<h3>Texto para responder ao síndico</h3>
+    <p class="hint" style="margin:-6px 0 12px">Mesma ordem e numeração do e-mail do Sr. Fernando. É só copiar e colar no corpo da resposta, sem anexo.</p>
+    <textarea class="input" id="pd-email" readonly aria-label="Texto do e-mail"></textarea>
+    <div class="actions" style="margin-top:12px;justify-content:flex-end"><button class="btn" type="button" id="pd-mail-x">Fechar</button><button class="btn primary" type="button" id="pd-mail-c">Copiar texto</button></div>`;
+  const ta = $("#pd-email"); ta.value = pdTextoEmail();
+  $("#modal").hidden = false;
+  $("#pd-mail-x").onclick = fecharModal;
+  $("#pd-mail-c").onclick = () => {
+    const manual = () => { ta.focus(); ta.select(); toast("Texto selecionado. Copie com Ctrl+C."); };
+    try { navigator.clipboard.writeText(ta.value).then(() => toast("Texto copiado."), manual); } catch(e){ manual(); }
+  };
+  $("#pd-mail-c").focus();
+});
 
 // ---------- início ----------
 $("#m-data").value = hoje();
