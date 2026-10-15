@@ -111,10 +111,17 @@
     const peso = a.reduce((s, t) => s + (/^\d+$/.test(t) ? 0.6 : 1), 0);
     return pontos / Math.max(peso, Math.min(b.length, 4) * 0.8);
   }
+  // quanto do nome do item do estoque aparece na descrição da nota (1 = todas as palavras)
+  function cobertura(desc, nome) {
+    const a = fichas(desc), b = fichas(nome).filter(t => t.length >= 2);
+    if (!b.length) return 0;
+    const acha = u => a.some(t => t === u || (t.length >= 3 && u.length >= 3 && (t.startsWith(u) || u.startsWith(t))));
+    return b.filter(acha).length / b.length;
+  }
   function sugerir(desc, itens, n) {
-    return itens.map(it => ({ it, nota: parecido(desc, it.nome + " " + (it.codigo || "")) }))
-      .filter(x => x.nota > 0.2).sort((x, y) => y.nota - x.nota).slice(0, n || 5);
+    return itens.map(it => ({ it, nota: parecido(desc, it.nome + " " + (it.codigo || "")), cobre: cobertura(desc, it.nome) }))
+      .filter(x => x.nota > 0.2).sort((x, y) => (y.nota - x.nota) || (y.cobre - x.cobre)).slice(0, n || 5);
   }
 
-  raiz.LeitorNF = { montarLinhas, lerDanfe, sugerir, parecido };
+  raiz.LeitorNF = { montarLinhas, lerDanfe, sugerir, parecido, cobertura };
 })(typeof window !== "undefined" ? window : globalThis);

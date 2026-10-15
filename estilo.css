@@ -366,3 +366,4 @@ td.mono{white-space:nowrap}
 .lote-st:empty{display:none}
 .lote-st.ok{color:var(--ok);font-weight:600}
 @media (max-width:560px){ .lote-campos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} .lote-campos .field:first-child{grid-column:1/-1} }
+.lote-top .selo{margin-left:6px;vertical-align:1px}

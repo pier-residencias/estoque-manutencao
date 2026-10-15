@@ -1638,11 +1638,27 @@ async function lerNotaPDF(file){
     if (dados.numero && !$("#m-nf").value.trim()) $("#m-nf").value = dados.numero;
   }
   renderNfAnexo();
+  // a conferência abre sozinha, já preenchida
+  if (dados && dados.itens.length && $("#modal").hidden && S.tab === "registrar") abrirLote();
 }
 const mapaNF = { ler(){ try { return JSON.parse(localStorage.getItem("nf-mapa")||"{}"); } catch(e){ return {}; } },
   gravar(m){ try { localStorage.setItem("nf-mapa", JSON.stringify(m)); } catch(e){} } };
 const chaveProduto = (forn, it) => norm(forn).replace(/[^a-z0-9]/g,"") + "|" + (it.codigo && it.codigo.length >= 6 ? it.codigo : norm(it.descricao));
 const fValorNF = v => { let t = (Number(v)||0).toFixed(4).replace(/0{1,2}$/, ""); return t.replace(".", ","); };
+const seloLote = st => ({
+  lembrado:'<span class="pill s-ok selo">Já cadastrado · escolhido antes</span>',
+  ok:'<span class="pill s-ok selo">Já cadastrado</span>',
+  manual:'<span class="pill s-ok selo">Escolhido</span>',
+  confira:'<span class="pill s-baixo selo">Confira o item</span>',
+  novo:'<span class="pill st-aberta selo">Item novo · será cadastrado</span>',
+  escolha:'<span class="pill s-zero selo">Escolha o item</span>'}[st] || "");
+// para um item novo, copia categoria, tipo e local do item mais parecido (ou do local mais comum)
+function dadosDeItemNovo(desc){
+  const todos = itensArr(), sug = LeitorNF.sugerir(desc, todos, 1)[0];
+  const conta = {}; todos.forEach(i => { if (i.local) conta[i.local] = (conta[i.local]||0) + 1; });
+  const localComum = Object.keys(conta).sort((a,b) => conta[b] - conta[a])[0] || "";
+  return sug && sug.nota >= 0.2 ? {categoria: sug.it.categoria || "", tipoItem: sug.it.tipoItem || "Consumível", local: sug.it.local || localComum} : {categoria:"", tipoItem:"Consumível", local: localComum};
+}
 const nomeDeNota = d => { const s = String(d||"").toLowerCase().replace(/\s+/g," ").trim(); return s.charAt(0).toUpperCase() + s.slice(1); };
 function abrirLote(){
   const L = S.nfLida; if (!L || !L.dados) return;
@@ -1651,15 +1667,17 @@ function abrirLote(){
   const linhas = N.itens.map((it, i) => {
     const sug = LeitorNF.sugerir(it.descricao, todos, 5);
     const lembrado = mapa[chaveProduto(forn, it)];
-    let sel = "";
-    if (lembrado && S.itens.has(lembrado)) sel = lembrado;
-    else if (sug.length && sug[0].nota >= 0.35 && (!sug[1] || sug[0].nota - sug[1].nota >= 0.08)) sel = sug[0].it.id;
-    else if ((!sug.length || sug[0].nota < 0.3) && podeNovo) sel = "__novo";
+    let sel = "", st = "escolha";
+    const folga = sug.length > 1 ? sug[0].nota - sug[1].nota : 1;
+    if (lembrado && S.itens.has(lembrado)) { sel = lembrado; st = "lembrado"; }
+    else if (sug.length && folga >= 0.08 && (sug[0].nota >= 0.5 || (sug[0].cobre === 1 && sug[0].nota >= 0.35))) { sel = sug[0].it.id; st = "ok"; }
+    else if (sug.length && sug[0].nota >= 0.35) { sel = sug[0].it.id; st = "confira"; }
+    else if (podeNovo) { sel = "__novo"; st = "novo"; }
     const opt = i2 => `<option value="${esc(i2.id)}" ${i2.id===sel?"selected":""}>${esc((i2.codigo?i2.codigo+" · ":"") + i2.nome)} (${fNum(i2.qtd)} ${esc(i2.unidade||"")})</option>`;
     const sugIds = new Set(sug.map(x => x.it.id)); if (lembrado) sugIds.add(lembrado);
     const topo = [...sugIds].map(id => S.itens.get(id)).filter(Boolean);
     return `<div class="lote-item" data-i="${i}">
-      <label class="lote-top"><input type="checkbox" data-k="usar" checked> <span><b>${esc(it.descricao)}</b><span class="sub">${it.codigo ? "cód. " + esc(it.codigo) + " · " : ""}${fNum(it.qtd)} ${esc(it.unidade)} × ${fBRL(it.valorUnit)} = ${fBRL(it.valorTotal)}</span></span></label>
+      <label class="lote-top"><input type="checkbox" data-k="usar" checked> <span><b>${esc(it.descricao)}</b> ${seloLote(st)}<span class="sub">${it.codigo ? "cód. " + esc(it.codigo) + " · " : ""}${fNum(it.qtd)} ${esc(it.unidade)} × ${fBRL(it.valorUnit)} = ${fBRL(it.valorTotal)}</span></span></label>
       <div class="lote-campos">
         <div class="field"><label for="lt-it-${i}">Item do estoque</label><select class="input" id="lt-it-${i}" data-k="item">
           <option value="" ${sel===""?"selected":""}>Escolha o item do estoque…</option>
@@ -1674,9 +1692,13 @@ function abrirLote(){
     </div>`;
   }).join("");
   const soma = N.itens.reduce((t, it) => t + (Number(it.valorTotal)||0), 0);
+  // nota já lançada antes? (procura nas entradas carregadas: mês atual e o do histórico)
+  const fornCurto = norm(forn).replace(/[^a-z0-9]/g, "").slice(0, 12);
+  const jaLancadas = nf ? S.movs.filter(m => m.tipo === "entrada" && !m.estornado && String(m.nf).replace(/^0+/, "") === String(nf).replace(/^0+/, "") && (!fornCurto || norm(m.fornecedor).replace(/[^a-z0-9]/g, "").slice(0, 12) === fornCurto)) : [];
   $("#modal-box").innerHTML = `
-    <h3>Itens da nota${nf ? " " + esc(nf) : ""}</h3>
-    <p class="muted" style="margin:-6px 0 14px">${esc([forn, N.data ? "emitida em " + fData(N.data) : "", N.valorTotal != null ? "total " + fBRL(N.valorTotal) : ""].filter(Boolean).join(" · "))}. Confira cada linha e escolha o item do estoque correspondente.</p>
+    <h3>Conferir a nota${nf ? " " + esc(nf) : ""}</h3>
+    <p class="muted" style="margin:-6px 0 14px">${esc([forn, N.data ? "emitida em " + fData(N.data) : "", N.valorTotal != null ? "total " + fBRL(N.valorTotal) : ""].filter(Boolean).join(" · "))}. O sistema já preencheu tudo: confira as linhas marcadas em amarelo e clique em Finalizar.</p>
+    ${jaLancadas.length ? `<div class="notice warn"><b>Atenção: esta nota já foi lançada.</b> Há ${jaLancadas.length} ${jaLancadas.length===1?"entrada":"entradas"} da nota ${esc(nf)} registrada${jaLancadas.length===1?"":"s"} em ${esc(fData(jaLancadas[0].data))} por ${esc(jaLancadas[0].registradoPor||"—")}. Finalizar de novo vai somar as quantidades outra vez no estoque.</div>` : ""}
     <form class="form" id="f-lote" novalidate autocomplete="off">
       <div class="field"><label for="lt-forn">Fornecedor</label><input class="input" id="lt-forn" value="${esc(forn)}" list="dl-forn"></div>
       <div class="field"><label for="lt-nf">Nota fiscal</label><input class="input" id="lt-nf" value="${esc(nf)}"></div>
@@ -1684,12 +1706,22 @@ function abrirLote(){
       <div class="field"><label for="lt-rec">Quem recebeu</label><input class="input" id="lt-rec" value="${esc($("#m-recebeu").value.trim() || S.nome)}" list="dl-resp"></div>
       <div class="full lote">${linhas}</div>
       <p class="hint full">${N.itens.length===1 ? "1 item lido" : N.itens.length + " itens lidos"}, somando ${fBRL(soma)}${N.valorTotal != null && Math.abs(soma - N.valorTotal) > 0.05 ? ` · o total da nota é ${fBRL(N.valorTotal)} (pode haver frete ou desconto)` : ""}. A nota fica anexada em cada entrada.</p>
-      <div class="full actions"><button class="btn primary" type="submit" id="lt-ok">Registrar entradas</button><button class="btn" type="button" id="lt-no">Cancelar</button><span class="hint" id="lt-msg"></span></div>
+      <div class="full actions"><button class="btn primary" type="submit" id="lt-ok">Finalizar</button><button class="btn" type="button" id="lt-no">Cancelar</button><span class="hint" id="lt-msg"></span></div>
     </form>`;
   $("#modal-box").classList.add("largo");
   $("#modal").hidden = false;
   $("#lt-no").onclick = fecharModal;
-  const contar = () => { const n = $$("#f-lote [data-k=usar]").filter(c => c.checked && !c.disabled).length; $("#lt-ok").textContent = n ? `Registrar ${n} ${n===1?"entrada":"entradas"}` : "Nenhum item marcado"; $("#lt-ok").disabled = !n; };
+  const contar = () => {
+    const vivos = $$("#f-lote .lote-item").filter(el => { const c = $("[data-k=usar]", el); return c.checked && !c.disabled; });
+    const novos = vivos.filter(el => $("[data-k=item]", el).value === "__novo").length, n = vivos.length;
+    $("#lt-ok").textContent = n ? `Finalizar: registrar ${n} ${n===1?"entrada":"entradas"}${novos ? ` e cadastrar ${novos} ${novos===1?"item novo":"itens novos"}` : ""}` : "Nenhum item marcado";
+    $("#lt-ok").disabled = !n;
+  };
+  $$("#f-lote [data-k=item]").forEach(sel => sel.addEventListener("change", () => {
+    const top = sel.closest(".lote-item").querySelector(".selo"), st = sel.value === "__novo" ? "novo" : sel.value ? "manual" : "escolha";
+    if (top) top.outerHTML = seloLote(st);
+    contar();
+  }));
   $$("#f-lote [data-k=usar]").forEach(c => c.addEventListener("change", () => { c.closest(".lote-item").classList.toggle("off", !c.checked); contar(); }));
   contar();
   $("#f-lote").addEventListener("submit", async ev => {
@@ -1717,7 +1749,8 @@ function abrirLote(){
           let itemId = f.sel;
           if (itemId === "__novo") {
             const nome = nomeDeNota(f.it.descricao);
-            await api("salvarItem", {item:{codigo:"", nome, categoria:"", tipoItem:"Consumível", unidade:String(f.it.unidade||"un").toLowerCase(), local:"", qtd:0, minimo:0, obs:`Cadastrado pela nota ${numero}${fornecedor ? " (" + fornecedor + ")" : ""}`}});
+            const base = dadosDeItemNovo(f.it.descricao);
+            await api("salvarItem", {item:Object.assign(base, {codigo:"", nome, unidade:String(f.it.unidade||"un").toLowerCase(), qtd:0, minimo:0, obs:`Cadastrado pela nota ${numero}${fornecedor ? " (" + fornecedor + ")" : ""}${f.it.codigo ? " · cód. do fornecedor " + f.it.codigo : ""}`})});
             const novo = itensArr().filter(i => i.nome === nome).sort((a,b) => String(b.criadoEm).localeCompare(String(a.criadoEm)))[0];
             if (!novo) throw {message:"O item novo não apareceu na lista. Atualize a página."};
             itemId = novo.id;
@@ -1736,7 +1769,8 @@ function abrirLote(){
       }
       mapaNF.gravar(mapa);
       fecharModal();
-      toast(`${feitas} ${feitas===1?"entrada registrada":"entradas registradas"} da nota ${numero}.`);
+      const nNovos = filas.filter(f => f.sel === "__novo").length;
+      toast(`Nota ${numero} finalizada: ${feitas} ${feitas===1?"entrada registrada":"entradas registradas"}${nNovos ? ` e ${nNovos} ${nNovos===1?"item novo cadastrado":"itens novos cadastrados"}` : ""}.`);
       renderNfAnexo();
     } finally { if ($("#lt-no")) $("#lt-no").disabled = false; S.ocupado = false; renderSync(); if ($("#lt-ok")) contar(); }
   });
