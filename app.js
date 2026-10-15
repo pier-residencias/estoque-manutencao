@@ -26,7 +26,8 @@ const API = (window.ESTOQUE_API_URL || "").trim();
 const S = {
   usuario:"", nome:"", senha:"", perfil:"", perms:{}, rel:null, eq:null, dashPreset:"mes", itens:new Map(), emprestimos:[], movs:[],
   tab:"painel", tipo:"saida", picked:null, iStatus:"", hTipo:"", histMes:mesDe(), ocupado:false, ultima:null,
-  os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null, nfLida:null
+  os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null, nfLida:null,
+  iPer:{tipo:"", modo:"mes", mes:mesDe(), dia:hoje()}, mesesCarregados:[]
 };
 const can = p => !!(S.perms && S.perms[p]);
 const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"]};
@@ -42,7 +43,8 @@ const apagarSessao = () => { try { localStorage.removeItem("estoque-sessao"); } 
 // ---------- comunicação com a planilha ----------
 async function api(acao, extra){
   if (!API) throw {paraUsuario:true, message:"O endereço da planilha ainda não foi configurado (arquivo config.js)."};
-  const corpo = Object.assign({acao, usuario:S.usuario, senha:S.senha, meses:[...new Set([mesDe(), S.histMes])]}, extra||{});
+  const meses = [...new Set([mesDe(), S.histMes].concat(S.iPer.tipo && S.iPer.tipo !== "cad" ? [perMes()] : []))];
+  const corpo = Object.assign({acao, usuario:S.usuario, senha:S.senha, meses}, extra||{});
   let r;
   try {
     const resp = await fetch(API, {method:"POST", body:JSON.stringify(corpo), redirect:"follow"});
@@ -57,7 +59,7 @@ async function api(acao, extra){
   if (r.perms) { S.perms = r.perms; aplicarPermissoes(); }
   if (r.perfil) S.perfil = r.perfil;
   if (r.nome) S.nome = r.nome;
-  if (r.dados) aplicar(r.dados);
+  if (r.dados) { S.mesesCarregados = meses; aplicar(r.dados); }
   return r;
 }
 function aplicar(d){
@@ -234,9 +236,48 @@ function descMov(m){
 }
 
 // ---------- tela de itens ----------
+// filtro por data na tela de itens
+const perMes = () => S.iPer.modo === "dia" ? String(S.iPer.dia || hoje()).slice(0,7) : (S.iPer.mes || mesDe());
+const naData = d => { const x = String(d || ""); return S.iPer.modo === "dia" ? x.slice(0,10) === S.iPer.dia : x.slice(0,7) === S.iPer.mes; };
+const descPer = () => S.iPer.modo === "dia" ? fData(S.iPer.dia) : nomeMes(S.iPer.mes || mesDe());
+function resumoPeriodo(){
+  const por = {};
+  S.movs.forEach(m => {
+    if (m.estornado || m.tipo === "estorno" || !naData(m.data)) return;
+    const r = por[m.itemId] = por[m.itemId] || {ent:0, sai:0, emp:0, dev:0, aj:0, n:0};
+    const q = Number(m.qtd) || 0; r.n++;
+    if (m.tipo === "entrada") r.ent += q;
+    else if (m.tipo === "saida" || m.tipo === "troca") r.sai += q;
+    else if (m.tipo === "emprestimo") r.emp += q;
+    else if (m.tipo === "devolucao") r.dev += q;
+    else if (m.tipo === "ajuste") r.aj++;
+  });
+  return por;
+}
+function renderPerFiltro(){
+  const t = S.iPer.tipo, on = !!t;
+  $("#i-per-modo").hidden = !on; $("#i-per-limpar").hidden = !on;
+  $("#i-per-mes").hidden = !on || S.iPer.modo !== "mes"; $("#i-per-dia").hidden = !on || S.iPer.modo !== "dia";
+  $("#i-per-mes").value = S.iPer.mes; $("#i-per-dia").value = S.iPer.dia;
+  syncChips("#i-per-modo", "m", S.iPer.modo);
+  $("#i-th-per").hidden = !on;
+}
+function mudouPer(){
+  renderPerFiltro(); renderItens();
+  if (S.iPer.tipo && S.iPer.tipo !== "cad" && !S.mesesCarregados.includes(perMes())) atualizar();
+}
+$("#i-per-tipo").addEventListener("change", () => { S.iPer.tipo = $("#i-per-tipo").value; mudouPer(); });
+$$("#i-per-modo .chip").forEach(c => c.addEventListener("click", () => { S.iPer.modo = c.dataset.m; mudouPer(); }));
+$("#i-per-mes").addEventListener("change", () => { S.iPer.mes = $("#i-per-mes").value || mesDe(); mudouPer(); });
+$("#i-per-dia").addEventListener("change", () => { S.iPer.dia = $("#i-per-dia").value || hoje(); mudouPer(); });
+$("#i-per-limpar").addEventListener("click", () => { S.iPer.tipo = ""; $("#i-per-tipo").value = ""; mudouPer(); });
+renderPerFiltro();
+
 function renderItens(){
   const q = norm($("#i-busca").value), cat = $("#i-cat").value;
   const all = itensArr();
+  const pt = S.iPer.tipo, per = pt ? resumoPeriodo() : null;
+  const carregando = pt && pt !== "cad" && !S.mesesCarregados.includes(perMes());
   const cats = [...new Set(all.map(i=>i.categoria).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"));
   const sel = $("#i-cat"), cur = sel.value;
   sel.innerHTML = `<option value="">Todas as categorias</option>` + cats.map(c=>`<option ${c===cur?"selected":""}>${esc(c)}</option>`).join("");
@@ -246,19 +287,36 @@ function renderItens(){
     if (S.iStatus==="baixo" && st==="ok") return false;
     if (S.iStatus==="zero" && st!=="zero") return false;
     if (q && !norm([i.nome,i.codigo,i.local,i.categoria].join(" ")).includes(q)) return false;
+    if (pt === "cad" && !naData(i.criadoEm)) return false;
+    if (pt === "ent" && !(per[i.id] && per[i.id].ent > 0)) return false;
+    if (pt === "sai" && !(per[i.id] && per[i.id].sai > 0)) return false;
+    if (pt === "mov" && !per[i.id]) return false;
     return true;
   });
-  $("#i-count").textContent = all.length ? `${list.length} de ${all.length} itens` : "";
+  if (pt === "cad") list.sort((a,b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
+  else if (pt) { const k = pt === "ent" ? "ent" : pt === "sai" ? "sai" : "n"; list.sort((a,b) => (per[b.id][k] - per[a.id][k]) || String(a.nome).localeCompare(String(b.nome),"pt-BR")); }
+  const colPer = i => {
+    if (pt === "cad") return `<span class="muted">${fDataHora(i.criadoEm)}</span>`;
+    const r = per[i.id] || {}, u = esc(i.unidade||""), p = [];
+    if (r.ent) p.push(`<span class="per-ent">+${fNum(r.ent)} ${u} entrada</span>`);
+    if (r.sai) p.push(`<span class="per-sai">−${fNum(r.sai)} ${u} saída</span>`);
+    if (r.emp) p.push(`${fNum(r.emp)} ${u} emprestado`);
+    if (r.dev) p.push(`${fNum(r.dev)} ${u} devolvido`);
+    if (r.aj) p.push(`${r.aj} ajuste${r.aj===1?"":"s"}`);
+    return p.join("<br>") || "—";
+  };
+  $("#i-count").textContent = all.length ? `${list.length} de ${all.length} itens` + (pt ? ` · ${descPer()}` : "") : "";
   $("#i-body").innerHTML = list.length ? list.map(i => `
     <tr><td class="mono">${esc(i.codigo||"—")}</td>
     <td><b>${esc(i.nome)}</b><span class="sub">${esc(i.tipoItem||"")}</span></td>
+    ${pt ? `<td class="per-cel">${colPer(i)}</td>` : ""}
     <td class="hide-m">${esc(i.categoria||"—")}</td>
     <td class="hide-s">${esc(i.local||"—")}</td>
     <td class="n"><b>${fNum(i.qtd)}</b> <span class="muted">${esc(i.unidade||"")}</span></td>
     <td class="n hide-s">${Number(i.minimo)>0?fNum(i.minimo):"—"}</td>
     <td>${stPill(statusItem(i))}</td>
     <td class="n"><button class="btn small" data-item="${esc(i.id)}">${can("itens_editar")?"Editar":"Ver"}</button></td></tr>`).join("")
-    : `<tr><td colspan="8"><div class="empty">${all.length ? "Nenhum item com esses filtros." : (S.ultima ? "Nenhum item cadastrado ainda. Cadastre o primeiro em <b>Novo item</b>." : "Carregando os itens da planilha…")}</div></td></tr>`;
+    : `<tr><td colspan="9"><div class="empty">${carregando ? `<span class="spin" aria-hidden="true"></span> Buscando as movimentações de ${esc(descPer())}…` : pt && all.length ? `Nenhum item ${{cad:"cadastrado", ent:"com entrada", sai:"com saída ou troca", mov:"com movimento"}[pt]} em ${esc(descPer())}.` : all.length ? "Nenhum item com esses filtros." : (S.ultima ? "Nenhum item cadastrado ainda. Cadastre o primeiro em <b>Novo item</b>." : "Carregando os itens da planilha…")}</div></td></tr>`;
 }
 $("#i-busca").addEventListener("input", renderItens);
 $("#i-cat").addEventListener("change", renderItens);

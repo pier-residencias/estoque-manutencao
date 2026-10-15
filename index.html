@@ -271,8 +271,22 @@
       <button class="btn" id="i-importar" hidden>Importar inventário</button>
       <button class="btn primary" id="i-novo">Novo item</button>
     </div>
+    <div class="toolbar per-filtro" id="i-per">
+      <label class="per-lbl" for="i-per-tipo">Filtrar por data</label>
+      <select class="input" id="i-per-tipo">
+        <option value="">Todas as datas</option>
+        <option value="cad">Cadastrados em</option>
+        <option value="ent">Com entrada (compra) em</option>
+        <option value="sai">Com saída ou troca em</option>
+        <option value="mov">Com qualquer movimento em</option>
+      </select>
+      <div class="chips" id="i-per-modo" hidden><button class="chip" data-m="mes" aria-pressed="true">Mês</button><button class="chip" data-m="dia" aria-pressed="false">Dia</button></div>
+      <input class="input" type="month" id="i-per-mes" aria-label="Mês" hidden>
+      <input class="input" type="date" id="i-per-dia" aria-label="Dia" hidden>
+      <button class="link" type="button" id="i-per-limpar" hidden>limpar filtro</button>
+    </div>
     <div class="tablebox"><table>
-      <thead><tr><th>Código</th><th>Item</th><th class="hide-m">Categoria</th><th class="hide-s">Local</th><th class="n">Estoque</th><th class="n hide-s">Mín.</th><th>Situação</th><th></th></tr></thead>
+      <thead><tr><th>Código</th><th>Item</th><th id="i-th-per" hidden>No período</th><th class="hide-m">Categoria</th><th class="hide-s">Local</th><th class="n">Estoque</th><th class="n hide-s">Mín.</th><th>Situação</th><th></th></tr></thead>
       <tbody id="i-body"></tbody>
     </table></div>
   </section>

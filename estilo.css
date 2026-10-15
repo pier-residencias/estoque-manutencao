@@ -373,3 +373,12 @@ td.mono{white-space:nowrap}
 .resumo-top h3{margin:8px 0 4px;font-family:var(--f-display);font-weight:700;font-size:1.35rem;letter-spacing:.03em;text-transform:uppercase}
 .resumo-top p{margin:0;font-size:.9rem}
 .resumo-nota td .pill{margin-left:6px;vertical-align:1px}
+
+/* Filtro por data nos itens */
+.per-filtro{margin-top:-2px}
+.per-lbl{font-size:.8rem;font-weight:600;color:var(--muted)}
+.toolbar .per-filtro select.input,#i-per-tipo{flex:0 1 270px}
+#i-per-mes,#i-per-dia{flex:0 1 180px;width:auto}
+.per-cel{font-size:.85rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+.per-ent{color:var(--ok);font-weight:600}
+.per-sai{color:var(--info);font-weight:600}
