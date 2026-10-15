@@ -31,6 +31,8 @@ const S = {
   setores:["Manutenção"], setor:"Manutenção", empTodos:[]
 };
 const setorDe = x => (x && x.setor) || "Manutenção";
+const SETORES_PERM = [["Manutenção","setor_manutencao"],["Limpeza","setor_limpeza"]];
+const setoresDasPerms = p => { const l = SETORES_PERM.filter(x => p && p[x[1]]).map(x => x[0]); return l.length ? l : ["Manutenção"]; };
 const doSetor = x => setorDe(x) === S.setor;
 const can = p => !!(S.perms && S.perms[p]);
 const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"]};
@@ -104,6 +106,7 @@ function renderNotices(){
 // ---------- entrada ----------
 function mostrarLogin(msg){
   $("#login").hidden = false;
+  try { const s0 = localStorage.getItem("estoque-setor"); if (s0 && [...$("#l-setor").options].some(o => o.value === s0)) $("#l-setor").value = s0; } catch(e){}
   $("#l-usuario").value = S.usuario || "";
   $("#l-senha").value = "";
   $("#l-msg").textContent = msg || ""; $("#l-msg").className = msg ? "hint err" : "hint";
@@ -117,15 +120,26 @@ $("#f-login").addEventListener("submit", async ev => {
   if (!senha) { msg.textContent = "Informe a senha."; msg.className = "hint err"; return; }
   const btn = $("#l-entrar"); btn.disabled = true; msg.className = "hint"; msg.textContent = "Entrando…";
   S.usuario = usuario; S.senha = senha;
+  const setorEscolhido = $("#l-setor").value;
   try {
     await api("entrar");
+    const permitidos = setoresDasPerms(S.perms);
+    if (!permitidos.includes(setorEscolhido)) {
+      S.senha = ""; S.perms = {};
+      msg.className = "hint err";
+      msg.textContent = `Este login não tem acesso ao setor ${setorEscolhido}. Escolha ${permitidos.join(" ou ")}.`;
+      return;
+    }
+    S.setor = setorEscolhido; S.setores = permitidos;
+    try { localStorage.setItem("estoque-setor", setorEscolhido); } catch(e){}
     guardar(); $("#login").hidden = true; renderMe(); setTab(podeAba(S.tab) ? S.tab : primeiraAba()); atualizar();
   } catch(e){ S.senha = ""; msg.className = "hint err"; msg.textContent = e.message; }
   finally { btn.disabled = false; }
 });
 
 function renderMe(){
-  $("#me").innerHTML = `<div style="text-align:right"><div class="who">${esc(S.nome)}</div><span class="role ${can("usuarios")?"adm":""}">${esc(S.perfil||"")}</span> <button class="sair" id="b-sair" type="button">Sair</button><div class="sync" id="sync"></div></div>`;
+  $("#me").innerHTML = `<div style="text-align:right"><div class="who">${esc(S.nome)}</div><span class="role ${can("usuarios")?"adm":""}">${esc(S.perfil||"")}</span> <button class="sair" id="b-sair" type="button">Sair</button><div class="me-setor" id="me-setor"></div><div class="sync" id="sync"></div></div>`;
+  renderSetorSel();
   $("#b-sair").onclick = () => sair("");
   renderSync();
 }
@@ -176,12 +190,13 @@ function proxCodigo(){
   return pre + String(max+1).padStart(pre === "MAN-" ? 4 : 3, "0");
 }
 // seletor de setor (Manutenção | Limpeza): aparece para quem vê mais de um
-const ABAS_COM_SETOR = ["painel","registrar","itens","historico","emprestimos","dashboard"];
 function renderSetorSel(){
-  const bar = $("#setor-bar"); if (!bar) return;
-  bar.hidden = S.setores.length < 2 || !ABAS_COM_SETOR.includes(S.tab);
-  $("#setor-btns").innerHTML = S.setores.map(x => `<button type="button" data-setor="${esc(x)}" aria-pressed="${x===S.setor}">${esc(x)}</button>`).join("");
-  $$(".setor-nome").forEach(el => el.textContent = S.setores.length > 1 ? " · " + S.setor : "");
+  const el = $("#me-setor");
+  if (el) {
+    const outro = S.setores.find(x => x !== S.setor);
+    el.innerHTML = `Setor: <b>${esc(S.setor)}</b>${outro ? ` <button class="sair" type="button" data-setor="${esc(outro)}" title="Mudar para ${esc(outro)}">trocar</button>` : ""}`;
+  }
+  $$(".setor-nome").forEach(n => n.textContent = S.setores.length > 1 ? " · " + S.setor : "");
 }
 function mudarSetor(x){
   if (x === S.setor || !S.setores.includes(x)) return;
@@ -190,7 +205,7 @@ function mudarSetor(x){
   S.picked = null; S.iStatus = ""; syncChips("#i-status","s",S.iStatus); $("#i-cat").value = "";
   renderSetorSel(); renderAll(); renderSugestoes();
 }
-document.addEventListener("click", e => { const b = e.target.closest("#setor-btns [data-setor]"); if (b) mudarSetor(b.dataset.setor); });
+document.addEventListener("click", e => { const b = e.target.closest("#me-setor [data-setor]"); if (b) { mudarSetor(b.dataset.setor); toast(`Setor ${S.setor}.`); } });
 const ordMov = (a,b) => String(b.data||"").localeCompare(String(a.data||"")) || String(b.criadoEm||"").localeCompare(String(a.criadoEm||""));
 const sinal = m => (Number(m.delta)>0?"+":Number(m.delta)<0?"−":"");
 
@@ -2084,6 +2099,7 @@ renderAll();
 const sess = lerSessao();
 if (sess && sess.senha && sess.usuario) {
   S.usuario = sess.usuario || ""; S.senha = sess.senha;
+  try { S.setor = localStorage.getItem("estoque-setor") || S.setor; } catch(e){}
   api("entrar").then(() => { renderMe(); setTab(podeAba(S.tab) ? S.tab : primeiraAba()); atualizar(); }).catch(e => { S.senha = ""; mostrarLogin(e.message); });
 } else {
   mostrarLogin("");

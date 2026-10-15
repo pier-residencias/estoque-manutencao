@@ -21,7 +21,8 @@
         <img class="logo-login" src="img/logo.png" alt="Pier Residências" width="900" height="272">
       </picture>
       <h2>Pier Gestão</h2>
-      <p>Entre com o seu usuário e a sua senha.</p>
+      <p>Escolha o setor e entre com o seu usuário e a sua senha.</p>
+      <div class="field"><label for="l-setor">Setor</label><select class="input" id="l-setor"><option>Manutenção</option><option>Limpeza</option></select></div>
       <div class="field"><label for="l-usuario">Usuário</label><input class="input" id="l-usuario" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Ex.: funcionario1"></div>
       <div class="field"><label for="l-senha">Senha</label><input class="input" id="l-senha" type="password" autocomplete="current-password"></div>
       <div class="actions"><button class="btn primary" type="submit" id="l-entrar">Entrar</button><span class="hint" id="l-msg"></span></div>
@@ -58,8 +59,6 @@
     <button role="tab" data-tab="usuarios" aria-selected="false">Usuários</button>
   </div>
 </nav>
-
-<div class="setor-bar" id="setor-bar" hidden><div class="wrap"><span class="setor-lbl">Setor do estoque</span><div class="setor-btns" id="setor-btns" role="group" aria-label="Setor do estoque"></div></div></div>
 
 <main class="wrap">
   <div id="notices"></div>
