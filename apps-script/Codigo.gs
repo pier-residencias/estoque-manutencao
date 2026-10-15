@@ -101,7 +101,8 @@ const ABAS = {
     cols: [
       ['id', 'ID'], ['secao', 'Seção'], ['numero', 'Nº'], ['titulo', 'Pendência'], ['status', 'Situação'],
       ['responsavel', 'Responsável'], ['prazo', 'Prazo'], ['obs', 'Observação'], ['ordem', 'Ordem'],
-      ['atualizadoEm', 'Atualizado em'], ['atualizadoPor', 'Atualizado por']
+      ['atualizadoEm', 'Atualizado em'], ['atualizadoPor', 'Atualizado por'],
+      ['criadaPor', 'Incluída por'], ['origem', 'Origem'], ['vistaEm', 'Vista em'], ['vistaPor', 'Vista por']
     ],
     num: ['ordem']
   }
@@ -173,8 +174,10 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
+const VERSAO = '2026-10-15 síndico';
+
 function doGet() {
-  return json({ ok: true, app: 'Pier Gestão' });
+  return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
 }
 
 function doPost(e) {
@@ -1643,7 +1646,7 @@ function autorizar() {
   pendLista();
   abaPerfis();
   tabela('itens');
-  const limpeza = garantirLimpeza();
+  const limpeza = garantirLimpeza() + garantirSindico();
   Logger.log('Pronto: pastas de fotos e de notas fiscais, abas OS, Demandas, Preventivas e Pendencias, setores e permissões verificadas.' + limpeza);
 }
 
@@ -1745,7 +1748,8 @@ function pendLista() {
   if (!lista.length && pendSemear(t)) lista = linhas(t);
   return lista
     .map(p => ({ id: p.id, secao: p.secao, numero: p.numero, titulo: p.titulo, status: p.status, responsavel: p.responsavel,
-      prazo: p.prazo, obs: p.obs, ordem: p.ordem, atualizadoEm: p.atualizadoEm, atualizadoPor: p.atualizadoPor }))
+      prazo: p.prazo, obs: p.obs, ordem: p.ordem, atualizadoEm: p.atualizadoEm, atualizadoPor: p.atualizadoPor,
+      criadaPor: p.criadaPor, origem: p.origem, vistaEm: p.vistaEm, vistaPor: p.vistaPor }))
     .sort((a, b) => (Number(a.ordem) || 1e9) - (Number(b.ordem) || 1e9));
 }
 
@@ -1761,9 +1765,10 @@ function pendSemear(t) {
     const vals = PEND_INICIAIS.map((x, i) => {
       conta[x[0]] = (conta[x[0]] || 0) + 1;
       const o = { id: 'pd' + ('00' + (i + 1)).slice(-3), secao: PEND_SECOES[x[0]], numero: x[1], titulo: x[2], status: x[3],
-        responsavel: '', prazo: '', obs: x[4], ordem: x[0] * 1000 + conta[x[0]], atualizadoEm: quando, atualizadoPor: 'Relatório de 14/10' };
+        responsavel: '', prazo: '', obs: x[4], ordem: x[0] * 1000 + conta[x[0]], atualizadoEm: quando, atualizadoPor: 'Relatório de 14/10',
+        criadaPor: '', origem: '', vistaEm: '', vistaPor: '' };
       const r = new Array(t.ncol).fill('');
-      t.def.cols.forEach(([k]) => { r[t.idx[k]] = k === 'ordem' ? o[k] : String(o[k]); });
+      t.def.cols.forEach(([k]) => { r[t.idx[k]] = k === 'ordem' ? o[k] : (o[k] === undefined || o[k] === null ? '' : String(o[k])); });
       return r;
     });
     const rng = t.sh.getRange(2, 1, vals.length, t.ncol);
@@ -1784,7 +1789,16 @@ function pendSalvar(v, conta) {
   const id = texto(v.id, 40);
   const atual = id ? todas.find(p => p.id === id) : null;
   if (id && !atual) throw falha('Esta pendência não existe mais. Atualize a tela.');
+  const sindico = ehSindico(conta);
   const obj = { atualizadoEm: agora(), atualizadoPor: conta.nome };
+  // o que o síndico inclui fica destacado para a administração até alguém da equipe dar ciente ou mexer nele
+  if (atual && atual.origem === 'Síndico' && !atual.vistaEm && !sindico) { obj.vistaEm = agora(); obj.vistaPor = conta.nome; }
+  if (atual && v.ciente) {
+    if (sindico) throw falha('O ciente é dado pela administração.');
+    if (!obj.vistaEm) return 'Esta pendência já estava vista.';
+    gravar(t, { vistaEm: obj.vistaEm, vistaPor: obj.vistaPor }, atual._row);
+    return 'Ciente registrado.';
+  }
   if ('titulo' in v) { obj.titulo = texto(v.titulo, 300); if (!obj.titulo) throw falha('Descreva a pendência.'); }
   if ('status' in v) { if (PEND_STATUS.indexOf(v.status) < 0) throw falha('Situação inválida.'); obj.status = v.status; }
   if ('responsavel' in v) obj.responsavel = texto(v.responsavel, 60);
@@ -1803,10 +1817,22 @@ function pendSalvar(v, conta) {
     id: novoId('pd'), secao,
     numero: String((nums.length ? Math.max.apply(null, nums) : 0) + 1),
     status: obj.status || 'Pendente', responsavel: obj.responsavel || '', prazo: obj.prazo || '', obs: obj.obs || '',
+    criadaPor: conta.nome, origem: sindico ? 'Síndico' : '', vistaEm: '', vistaPor: '',
     ordem: Math.max.apply(null, [base].concat(daSecao.map(p => Number(p.ordem) || 0))) + 1
   });
   gravar(t, obj);
   return 'Pendência ' + obj.numero + ' adicionada.';
+}
+
+function ehSindico(conta) {
+  return String((conta && conta.perfil) || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().indexOf('sindico') >= 0;
+}
+
+// Perfil "Síndico": só o controle de pendências, com acesso completo (criado uma vez só)
+function garantirSindico() {
+  if (lerPerfis()['Síndico']) return '';
+  salvarPerfil({ nome: 'Síndico', perms: { pendencias: true } });
+  return ' Perfil Síndico criado.';
 }
 
 function pendExcluir(id) {

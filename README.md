@@ -67,6 +67,12 @@ Quem tem acesso a mais de uma opção troca pelo cabeçalho, ao lado de "Setor".
 
 Em **Administração → Controle de pendências** fica a lista de pendências cobrada pelo síndico, dividida nas mesmas seções do e-mail dele. Em cada linha dá para mudar a situação (Pendente, A cotar, Em andamento, Aguardando entrega, Aguardando síndico, Concluído), o responsável, o prazo e a observação; tudo é gravado na hora na aba **Pendencias** da planilha, com quem alterou e quando. Prazo vencido fica em vermelho. Há busca, filtros, resumo por situação, **+ Adicionar item** em cada seção (a seção **Outras demandas da administração** é para o que a administração toca e não está na lista do síndico) e o botão **Gerar texto para e-mail**, que monta o status de tudo no formato do e-mail do síndico para colar no corpo da resposta.
 
+Para incluir, use **+ Incluir pendência** (no topo da tela ou em **Administração → Incluir pendência**): seção, descrição, detalhes, prazo e responsável.
+
+**Síndico.** A função `autorizar` cria o perfil **Síndico**, só com a permissão Pendências (acesso completo à lista). Crie o login dele em **Usuários** com esse perfil; ele entra escolhendo **Administração** no campo Setor (logins sem setor do estoque são orientados a usar essa opção). O que o síndico inclui chega para a equipe destacado como **Nova do síndico**, com contador vermelho no menu Administração e no resumo; o destaque some quando alguém da equipe clica em **Ciente** ou altera a pendência. Na aba Pendencias da planilha ficam as colunas Incluída por, Origem, Vista em e Vista por.
+
+O link do Apps Script aberto no navegador mostra a versão do código instalado (campo `versao`), o que ajuda a conferir se a implantação nova entrou.
+
 A permissão é **Pendências** (grupo Administração). Na primeira vez que a aba Pendencias é aberta, ela recebe os 74 itens da lista de 13/10/2026 com a situação do relatório de 14/10; isso acontece uma vez só.
 
 ## Nota fiscal das compras
