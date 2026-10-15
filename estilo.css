@@ -367,3 +367,9 @@ td.mono{white-space:nowrap}
 .lote-st.ok{color:var(--ok);font-weight:600}
 @media (max-width:560px){ .lote-campos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} .lote-campos .field:first-child{grid-column:1/-1} }
 .lote-top .selo{margin-left:6px;vertical-align:1px}
+
+/* Resumo da nota finalizada */
+.resumo-nota{display:grid;gap:14px;border-left:5px solid var(--ok)}
+.resumo-top h3{margin:8px 0 4px;font-family:var(--f-display);font-weight:700;font-size:1.35rem;letter-spacing:.03em;text-transform:uppercase}
+.resumo-top p{margin:0;font-size:.9rem}
+.resumo-nota td .pill{margin-left:6px;vertical-align:1px}

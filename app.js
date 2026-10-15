@@ -354,6 +354,7 @@ function abrirItem(id, depois){
 
 // ---------- registrar ----------
 function setTipo(t){
+  if (typeof fecharResumoNota === "function" && $("#m-resumo") && !$("#m-resumo").hidden) fecharResumoNota();
   S.tipo = t;
   $$("#seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.tipo===t?"true":"false"));
   $$("#f-mov [data-for]").forEach(f => f.hidden = !f.dataset.for.split(" ").includes(t));
@@ -1685,7 +1686,7 @@ function abrirLote(){
           ${podeNovo ? `<option value="__novo" ${sel==="__novo"?"selected":""}>+ Cadastrar como item novo: ${esc(nomeDeNota(it.descricao))}</option>` : ""}
           <optgroup label="Todos os itens">${todos.filter(x => !sugIds.has(x.id)).map(opt).join("")}</optgroup>
         </select></div>
-        <div class="field"><label for="lt-q-${i}">Quantidade</label><input class="input num" id="lt-q-${i}" data-k="qtd" inputmode="decimal" value="${esc(fNum(it.qtd))}"></div>
+        <div class="field"><label for="lt-q-${i}">Quantidade</label><input class="input num" id="lt-q-${i}" data-k="qtd" inputmode="decimal" value="${esc(String(Math.round(it.qtd*1000)/1000).replace(".", ","))}"></div>
         <div class="field"><label for="lt-v-${i}">Valor unitário (R$)</label><input class="input num" id="lt-v-${i}" data-k="valor" inputmode="decimal" value="${esc(fValorNF(it.valorUnit))}"></div>
       </div>
       <span class="hint lote-st"></span>
@@ -1724,6 +1725,7 @@ function abrirLote(){
   }));
   $$("#f-lote [data-k=usar]").forEach(c => c.addEventListener("change", () => { c.closest(".lote-item").classList.toggle("off", !c.checked); contar(); }));
   contar();
+  const registrados = [];
   $("#f-lote").addEventListener("submit", async ev => {
     ev.preventDefault();
     const msg = $("#lt-msg"); msg.className = "hint err";
@@ -1758,6 +1760,8 @@ function abrirLote(){
           const mov = {tipo:"entrada", itemId, qtd:f.qtd, data, fornecedor, nf:numero, valorUnit: f.valor ? pQtd(f.valor) : "", responsavel:receb, obs:`Na nota: ${f.it.descricao}`};
           if (ids.length) mov.nfFotos = ids.join(",");
           await api("registrar", {mov});
+          const itR = S.itens.get(itemId) || {};
+          registrados.push({itemId, nome: itR.nome || nomeDeNota(f.it.descricao), codigo: itR.codigo || "", unidade: itR.unidade || "", estoque: itR.qtd, qtd: f.qtd, valor: mov.valorUnit, novo: f.sel === "__novo", descricao: f.it.descricao});
           mapa[chaveProduto(fornecedor, f.it)] = itemId;
           f.usar.disabled = true; f.el.classList.add("feito"); st.className = "hint lote-st ok"; st.textContent = "Registrado.";
           feitas++;
@@ -1769,12 +1773,50 @@ function abrirLote(){
       }
       mapaNF.gravar(mapa);
       fecharModal();
-      const nNovos = filas.filter(f => f.sel === "__novo").length;
-      toast(`Nota ${numero} finalizada: ${feitas} ${feitas===1?"entrada registrada":"entradas registradas"}${nNovos ? ` e ${nNovos} ${nNovos===1?"item novo cadastrado":"itens novos cadastrados"}` : ""}.`);
-      renderNfAnexo();
+      const nNovos = registrados.filter(r => r.novo).length;
+      toast(`Nota ${numero} finalizada: ${registrados.length} ${registrados.length===1?"entrada registrada":"entradas registradas"}${nNovos ? ` e ${nNovos} ${nNovos===1?"item novo cadastrado":"itens novos cadastrados"}` : ""}.`);
+      mostrarResumoNota({numero, fornecedor, data, receb, ids, itens: registrados, valorTotal: N.valorTotal});
     } finally { if ($("#lt-no")) $("#lt-no").disabled = false; S.ocupado = false; renderSync(); if ($("#lt-ok")) contar(); }
   });
 }
+
+// depois de finalizar a nota, a tela Registrar mostra o que entrou e fica limpa para a próxima
+function mostrarResumoNota(R){
+  S.nfArq = []; S.nfLida = null; S.nfAnexo = null;
+  ["m-forn","m-nf","m-valor","m-qtd","m-obs","m-recebeu"].forEach(id => $("#"+id).value = "");
+  S.picked = null; renderPicked(); renderNfAnexo();
+  const soma = R.itens.reduce((t, r) => t + (r.valor !== "" && r.valor != null ? Number(r.valor) * Number(r.qtd) : 0), 0);
+  const nNovos = R.itens.filter(r => r.novo).length;
+  const box = $("#m-resumo");
+  box.innerHTML = `
+    <div class="resumo-top">
+      <div><span class="pill s-ok">Nota finalizada</span>
+        <h3>Nota ${esc(R.numero)}${R.fornecedor ? " · " + esc(R.fornecedor) : ""}</h3>
+        <p class="muted">${esc(fData(R.data))} · recebida por ${esc(R.receb || "—")} · ${R.itens.length} ${R.itens.length===1?"entrada registrada":"entradas registradas"}${nNovos ? ` · ${nNovos} ${nNovos===1?"item novo cadastrado":"itens novos cadastrados"}` : ""}</p></div>
+    </div>
+    <div class="tablebox flat"><table>
+      <thead><tr><th>Item</th><th class="n">Entrou</th><th class="n hide-s">Valor un.</th><th class="n">Estoque agora</th></tr></thead>
+      <tbody>${R.itens.map(r => { const it = S.itens.get(r.itemId) || {}; return `<tr>
+        <td><b>${esc(r.nome)}</b> ${r.novo ? '<span class="pill st-aberta">Novo</span>' : ""}<span class="sub">${esc([r.codigo, "na nota: " + r.descricao].filter(Boolean).join(" · "))}</span></td>
+        <td class="n">+${fNum(r.qtd)} ${esc(r.unidade||"")}</td>
+        <td class="n hide-s">${r.valor !== "" && r.valor != null ? fBRL(r.valor) : "—"}</td>
+        <td class="n"><b>${fNum(it.qtd ?? r.estoque)}</b> ${esc(it.unidade || r.unidade || "")}</td></tr>`; }).join("")}</tbody>
+    </table></div>
+    <p class="hint">Total lançado: <b>${fBRL(soma)}</b>${R.valorTotal != null && Math.abs(soma - R.valorTotal) > 0.05 ? ` · total da nota: ${fBRL(R.valorTotal)}` : ""}. ${R.ids.length ? "A nota fiscal ficou anexada em cada entrada." : ""}</p>
+    <div class="actions">
+      <button class="btn primary" type="button" id="rs-outra">Lançar outra nota</button>
+      ${R.ids.length && can("historico_ver") ? `<button class="btn" type="button" id="rs-nota">Ver a nota</button>` : ""}
+      ${can("historico_ver") ? `<button class="btn" type="button" id="rs-hist">Ver no histórico</button>` : ""}
+      ${nNovos && can("itens_editar") ? `<button class="btn" type="button" id="rs-itens">Completar os itens novos</button>` : ""}
+    </div>`;
+  box.hidden = false; $("#f-mov").hidden = true;
+  window.scrollTo({top: box.getBoundingClientRect().top + window.scrollY - 80, behavior: "smooth"});
+  $("#rs-outra").onclick = () => { fecharResumoNota(); setTipo("entrada"); $("#m-nf-arq").closest(".nf-btn").focus(); };
+  const bn = $("#rs-nota"); if (bn) bn.onclick = () => abrirNF({nf: R.numero, fornecedor: R.fornecedor, data: R.data, itemNome: R.itens.length + (R.itens.length===1 ? " item" : " itens"), registradoPor: S.nome, nfFotos: R.ids.join(",")});
+  const bh = $("#rs-hist"); if (bh) bh.onclick = () => { fecharResumoNota(); S.histMes = mesDe(R.data); $("#h-mes").value = S.histMes; $("#h-busca").value = R.numero; setTab("historico"); atualizar(true); };
+  const bi = $("#rs-itens"); if (bi) bi.onclick = () => { const r = R.itens.find(x => x.novo); if (r) abrirItem(r.itemId); };
+}
+function fecharResumoNota(){ const box = $("#m-resumo"); if (box) { box.hidden = true; box.innerHTML = ""; } $("#f-mov").hidden = false; }
 
 async function abrirNF(m){
   const ids = idsNF(m.nfFotos); if (!ids.length) return;
