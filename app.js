@@ -26,7 +26,7 @@ const API = (window.ESTOQUE_API_URL || "").trim();
 const S = {
   usuario:"", nome:"", senha:"", perfil:"", perms:{}, rel:null, eq:null, dashPreset:"mes", itens:new Map(), emprestimos:[], movs:[],
   tab:"painel", tipo:"saida", picked:null, iStatus:"", hTipo:"", histMes:mesDe(), ocupado:false, ultima:null,
-  os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto"
+  os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null
 };
 const can = p => !!(S.perms && S.perms[p]);
 const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"]};
@@ -418,13 +418,25 @@ $("#f-mov").addEventListener("submit", async ev => {
   if (t==="entrada" && valorTxt && !Number.isFinite(valor)) { msg.textContent = "Valor unitário inválido."; return; }
   const mov = { tipo:t, itemId:it.id, qtd, data, obs:$("#m-obs").value.trim() };
   if (t==="entrada") Object.assign(mov, { fornecedor:$("#m-forn").value.trim(), nf:$("#m-nf").value.trim(), valorUnit:valor, responsavel:$("#m-recebeu").value.trim() });
-  else Object.assign(mov, { responsavel:resp, destino, motivo: t==="emprestimo" ? "" : $("#m-os").value.trim() });
+  let nfIds = [];
+  if (t==="entrada") {
+    if (S.nfArq.length) {
+      const btn = $("#m-enviar"); btn.disabled = true;
+      try { nfIds = await enviarNF(S.nfArq, mov.nf, mov.fornecedor, msg); }
+      finally { btn.disabled = false; }
+      if (!nfIds) return;
+    } else if (nfAnexoValido()) nfIds = S.nfAnexo.ids;
+    if (nfIds.length) mov.nfFotos = nfIds.join(",");
+  } else Object.assign(mov, { responsavel:resp, destino, motivo: t==="emprestimo" ? "" : $("#m-os").value.trim() });
   if (t==="troca") mov.velhoDestino = $("#m-velho").value;
   if (t==="emprestimo") mov.previsao = $("#m-prev").value || "";
   if ((t==="saida" || t==="troca") && $("#m-osref").value) mov.os = $("#m-osref").value;
   const r = await enviar($("#m-enviar"), msg, "registrar", {mov});
   if (r) {
-    ["m-qtd","m-obs","m-os","m-nf","m-valor","m-prev"].forEach(id => $("#"+id).value = "");
+    // numa entrada, a nota e o fornecedor ficam preenchidos para lançar os outros itens da mesma compra
+    S.nfAnexo = t==="entrada" && nfIds.length && mov.nf ? {chave:chaveNF(), ids:nfIds} : (t==="entrada" ? null : S.nfAnexo);
+    S.nfArq = []; renderNfAnexo();
+    ["m-qtd","m-obs","m-os","m-valor","m-prev"].concat(t==="entrada" && mov.nf ? [] : ["m-nf"]).forEach(id => $("#"+id).value = "");
     $("#m-velho").value = ""; msg.textContent = "";
     S.picked = null; renderPicked(); $("#m-busca").focus();
   }
@@ -456,7 +468,7 @@ function renderHist(){
     <td>${pill(m.tipo)}</td>
     <td><b>${esc(m.itemNome)}</b><span class="sub mono">${esc(m.itemCodigo||"")}</span></td>
     <td class="n">${sinal(m)}${fNum(m.qtd)} <span class="muted">${esc(m.unidade||"")}</span></td>
-    <td>${esc(m.tipo==="entrada" ? [m.fornecedor, m.nf?"NF "+m.nf:"", m.valorUnit!==""&&m.valorUnit!=null?fBRL(m.valorUnit)+"/un":""].filter(Boolean).join(" · ") : m.destino || "")}
+    <td>${esc(m.tipo==="entrada" ? [m.fornecedor, m.nf?"NF "+m.nf:"", m.valorUnit!==""&&m.valorUnit!=null?fBRL(m.valorUnit)+"/un":""].filter(Boolean).join(" · ") : m.destino || "")}${m.nfFotos ? ` <button type="button" class="link small-link" data-nfver="${esc(m.id)}">ver nota</button>` : ""}
       <span class="sub">${esc([m.os, m.motivo, m.tipo==="troca"&&m.velhoDestino?"Peça velha: "+m.velhoDestino:"", m.tipo==="emprestimo"&&m.previsao?"Devolver até "+fData(m.previsao):"", m.estadoDevolucao||"", m.obs].filter(Boolean).join(" · "))}</span></td>
     <td class="hide-s">${esc(m.responsavel||"—")}</td>
     <td class="hide-m">${esc(m.registradoPor||"—")}</td>
@@ -467,7 +479,10 @@ $("#h-mes").value = S.histMes;
 $("#h-mes").addEventListener("change", () => { S.histMes = $("#h-mes").value || mesDe(); renderHist(); atualizar(); });
 $("#h-busca").addEventListener("input", renderHist);
 $$("#h-tipos .chip").forEach(c => c.addEventListener("click", () => { S.hTipo = c.dataset.t; syncChips("#h-tipos","t",S.hTipo); renderHist(); }));
-$("#h-body").addEventListener("click", e => { const b = e.target.closest("[data-est]"); if (b) abrirEstorno(b.dataset.est); });
+$("#h-body").addEventListener("click", e => {
+  const n = e.target.closest("[data-nfver]"); if (n) { const m = S.movs.find(x => x.id === n.dataset.nfver); if (m) abrirNF(m); return; }
+  const b = e.target.closest("[data-est]"); if (b) abrirEstorno(b.dataset.est);
+});
 
 function abrirEstorno(id){
   const m = S.movs.find(x=>x.id===id); if (!m) return;
@@ -492,10 +507,10 @@ function abrirEstorno(id){
 
 $("#h-csv").addEventListener("click", () => {
   const list = movsDoMes(S.histMes).sort(ordMov);
-  const cols = ["Data","Tipo","Código","Item","Quantidade","Unidade","Efeito no estoque","Responsável","Destino","OS / motivo","Peça retirada","Fornecedor","NF","Valor unitário","Previsão devolução","Estado na devolução","Observação","Registrado por","Estornado"];
+  const cols = ["Data","Tipo","Código","Item","Quantidade","Unidade","Efeito no estoque","Responsável","Destino","OS / motivo","Peça retirada","Fornecedor","NF","Valor unitário","Previsão devolução","Estado na devolução","Observação","Registrado por","Estornado","Nota fiscal (link)"];
   const cell = v => { const s = String(v ?? ""); return /[";\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
   const n = v => v===""||v==null ? "" : String(v).replace(".",",");
-  const lines = [cols.join(";")].concat(list.map(m => [fData(m.data), TIPOS[m.tipo]?.nome||m.tipo, m.itemCodigo, m.itemNome, n(m.qtd), m.unidade, n(m.delta), m.responsavel, m.destino, m.motivo, m.velhoDestino, m.fornecedor, m.nf, n(m.valorUnit), m.previsao?fData(m.previsao):"", m.estadoDevolucao, m.obs, m.registradoPor, m.estornado?"sim":""].map(cell).join(";")));
+  const lines = [cols.join(";")].concat(list.map(m => [fData(m.data), TIPOS[m.tipo]?.nome||m.tipo, m.itemCodigo, m.itemNome, n(m.qtd), m.unidade, n(m.delta), m.responsavel, m.destino, m.motivo, m.velhoDestino, m.fornecedor, m.nf, n(m.valorUnit), m.previsao?fData(m.previsao):"", m.estadoDevolucao, m.obs, m.registradoPor, m.estornado?"sim":"", String(m.nfFotos||"").split(/\s+/).filter(Boolean).join(" ")].map(cell).join(";")));
   const blob = new Blob(["﻿"+lines.join("\r\n")], {type:"text/csv;charset=utf-8"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `movimentacoes-${S.histMes}.csv`;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -981,14 +996,14 @@ function novaOS(){
   });
 }
 
-async function reduzirFoto(file){
+async function reduzirFoto(file, maxLado=1600, qualidade=0.82){
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((ok, erro) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => erro(new Error("img")); i.src = url; });
-    const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const k = Math.min(1, maxLado / Math.max(img.naturalWidth, img.naturalHeight));
     const c = document.createElement("canvas"); c.width = Math.round(img.naturalWidth*k); c.height = Math.round(img.naturalHeight*k);
     c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-    return c.toDataURL("image/jpeg", 0.82).split(",")[1];
+    return c.toDataURL("image/jpeg", qualidade).split(",")[1];
   } finally { URL.revokeObjectURL(url); }
 }
 async function enviarFotos(osId, fase, arquivos, msgEl){
@@ -1534,6 +1549,71 @@ function renderDashDem(R){
   barras("#d-dem-colab", topN(conta(concl, d=>d.concluidaPor||d.responsavel), 10).map(([k,o]) => ({rotulo:k, v:o.v, txt:String(o.v), tip:[["concluídas", String(o.v)]]})), "Nenhuma demanda concluída no período.");
   $("#d-dem-atras").innerHTML = atras.length ? atras.sort(ordemDem).map(d => `<tr class="click" data-dem="${esc(d.id)}"><td class="mono">${esc(d.numero)}</td><td><b>${esc(d.titulo)}</b><span class="sub">${esc(d.local||"")}</span></td><td>${esc(d.responsavel||"—")}</td><td>${d.cienteEm ? fData(d.cienteEm) : d.responsavelUsuario ? '<span class="atras">não</span>' : "—"}</td><td class="n">${Math.max(1, Math.round((new Date(hoje()) - new Date(d.prazo)) / 864e5))} d</td></tr>`).join("")
     : `<tr><td colspan="5"><div class="empty">Nenhuma demanda atrasada.</div></td></tr>`;
+}
+
+// ---------- nota fiscal das compras ----------
+const chaveNF = () => norm($("#m-forn").value.trim()) + "|" + norm($("#m-nf").value.trim());
+const nfAnexoValido = () => !!(S.nfAnexo && S.nfAnexo.ids.length && S.nfAnexo.chave === chaveNF());
+const idsNF = v => { const s = String(v||""), l = s.match(/\/d\/([A-Za-z0-9_-]{10,})/g); return l ? l.map(x => x.slice(3)) : s.split(/[\s,]+/).filter(x => /^[A-Za-z0-9_-]{10,}$/.test(x)); };
+function renderNfAnexo(){
+  const lista = $("#m-nf-lista"); if (!lista) return;
+  if (S.nfArq.length) {
+    lista.innerHTML = S.nfArq.map((f,i) => `<span class="nf-chip">${f.type==="application/pdf" ? "PDF" : "Foto"} · ${esc(f.name.length>28 ? f.name.slice(0,25)+"…" : f.name)} <button type="button" class="link small-link" data-nfx="${i}" aria-label="Tirar ${esc(f.name)}">tirar</button></span>`).join("");
+  } else if (nfAnexoValido()) {
+    const n = S.nfAnexo.ids.length;
+    lista.innerHTML = `<span class="nf-chip ok">A nota ${esc($("#m-nf").value.trim())} já anexada (${n} arquivo${n===1?"":"s"}) vai junto neste item <button type="button" class="link small-link" data-nfx="reuso">não usar</button></span>`;
+  } else lista.innerHTML = "";
+}
+$("#m-nf-arq").addEventListener("change", () => {
+  const novos = [...$("#m-nf-arq").files].filter(f => /^image\//.test(f.type) || f.type === "application/pdf");
+  const grande = novos.find(f => f.type === "application/pdf" && f.size > 7*1024*1024);
+  if (grande) toast(`O PDF ${grande.name} passa de 7 MB. Tire uma foto da nota no lugar.`, true);
+  S.nfArq = S.nfArq.concat(novos.filter(f => f !== grande)).slice(0, 4);
+  $("#m-nf-arq").value = ""; renderNfAnexo();
+});
+$("#m-nf-lista").addEventListener("click", e => {
+  const b = e.target.closest("[data-nfx]"); if (!b) return;
+  if (b.dataset.nfx === "reuso") S.nfAnexo = null; else S.nfArq.splice(Number(b.dataset.nfx), 1);
+  renderNfAnexo();
+});
+["#m-forn","#m-nf"].forEach(sel => $(sel).addEventListener("input", renderNfAnexo));
+const lerBase64 = file => new Promise((ok, erro) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = () => erro(new Error("ler")); r.readAsDataURL(file); });
+async function enviarNF(arquivos, nf, fornecedor, msgEl){
+  const ids = [];
+  for (let i = 0; i < arquivos.length; i++) {
+    const f = arquivos[i];
+    msgEl.className = "hint"; msgEl.innerHTML = `<span class="spin" aria-hidden="true"></span> Enviando a nota fiscal${arquivos.length>1 ? ` (${i+1} de ${arquivos.length})` : ""}…`;
+    try {
+      const pdf = f.type === "application/pdf";
+      const b64 = pdf ? await lerBase64(f) : await reduzirFoto(f, 2400, 0.85);
+      const r = await api("nfEnviar", {mime: pdf ? "application/pdf" : "image/jpeg", b64, nf, fornecedor});
+      ids.push(r.arquivo.id);
+    } catch(e){
+      msgEl.className = "hint err";
+      msgEl.textContent = e && e.message && !["img","ler"].includes(e.message) ? e.message : `Não deu para ler o arquivo ${f.name}. Tente tirar a foto de novo.`;
+      return null;
+    }
+  }
+  return ids;
+}
+async function abrirNF(m){
+  const ids = idsNF(m.nfFotos); if (!ids.length) return;
+  $("#modal-box").innerHTML = `
+    <h3>Nota fiscal${m.nf ? " " + esc(m.nf) : ""}</h3>
+    <p class="muted" style="margin:-6px 0 14px">${esc([m.fornecedor, fData(m.data), m.itemNome, "registrada por " + (m.registradoPor||"—")].filter(Boolean).join(" · "))}</p>
+    <div class="nf-ver">${ids.map(id => `<div class="nf-item" data-nfid="${esc(id)}"><span class="spin" aria-hidden="true"></span> Carregando…</div>`).join("")}</div>
+    <div class="actions" style="margin-top:14px"><button class="btn" type="button" id="nf-fechar">Fechar</button></div>`;
+  $("#modal-box").classList.add("largo");
+  $("#modal").hidden = false; $("#nf-fechar").onclick = fecharModal;
+  $$("#modal-box [data-nfid]").forEach(async el => {
+    try {
+      const r = await api("nfVer", {fotoId: el.dataset.nfid});
+      const bytes = Uint8Array.from(atob(r.foto.b64), c => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], {type: r.foto.mime}));
+      if (r.foto.mime === "application/pdf") el.innerHTML = `<a class="btn" href="${url}" target="_blank" rel="noopener">Abrir o PDF da nota</a>`;
+      else { el.innerHTML = `<button type="button" class="foto-ver nf-img" aria-label="Ampliar a nota"><img src="${url}" alt="Foto da nota fiscal"></button>`; el.querySelector("button").onclick = () => verFotoGrande(url); }
+    } catch(e){ el.innerHTML = `<span class="muted">Não foi possível abrir este arquivo: ${esc(e.message||"")}</span>`; }
+  });
 }
 
 // ---------- importação de inventário ----------

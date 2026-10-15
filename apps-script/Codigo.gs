@@ -36,10 +36,10 @@ const ABAS = {
       ['valorUnit', 'Valor unitário'], ['previsao', 'Devolver até'], ['estadoDevolucao', 'Estado na devolução'],
       ['obs', 'Observação'], ['registradoPor', 'Registrado por'], ['criadoEm', 'Criado em'],
       ['estornado', 'Estornado'], ['estornoDe', 'Estorno de'], ['emprestimoId', 'ID do empréstimo'],
-      ['os', 'OS']
+      ['os', 'OS'], ['nfFotos', 'Foto da NF']
     ],
     num: ['qtd', 'delta', 'valorUnit'],
-    opcionais: ['os']
+    opcionais: ['os', 'nfFotos']
   },
   emp: {
     nome: 'Emprestimos',
@@ -101,6 +101,7 @@ const PREV_UNIDADES = ['dias', 'semanas', 'meses'];
 const OS_STATUS = { aberta: 'Aberta', andamento: 'Em andamento', concluida: 'Concluída', cancelada: 'Cancelada' };
 const OS_PRIORIDADES = ['Urgente', 'Alta', 'Normal', 'Baixa'];
 const OS_MAX_FOTOS = 8;
+const NF_MAX_ARQUIVOS = 4;
 
 const TIPOS = {
   entrada: 'Entrada', saida: 'Saída', troca: 'Troca', emprestimo: 'Empréstimo',
@@ -130,6 +131,8 @@ function doPost(e) {
     if (req.acao === 'dados') return json(Object.assign(base, { dados: dados(req.meses, conta) }));
     if (req.acao === 'relatorio') { pode('dashboard'); return json(Object.assign(base, { relatorio: relatorio(req.de, req.ate) })); }
     if (req.acao === 'usuarios') { pode('usuarios'); return json(Object.assign(base, { equipe: equipe() })); }
+    if (req.acao === 'nfVer') { algum(['historico_ver', 'registrar_entrada', 'dashboard']); return json(Object.assign(base, { foto: verArquivo(req.fotoId, pastaNF()) })); }
+    if (req.acao === 'nfEnviar') { pode('registrar_entrada'); return json(Object.assign(base, { arquivo: nfEnviar(req, conta) })); }
     if (req.acao === 'osFotoVer') { algum(['os_ver', 'os_abrir', 'os_atender', 'os_gerenciar']); return json(Object.assign(base, { foto: verFoto(req.fotoId) })); }
 
     const lock = LockService.getScriptLock();
@@ -179,6 +182,14 @@ function registrar(m, nome) {
     if (!texto(m.destino)) throw falha('Informe o destino.');
   }
   if (tipo === 'troca' && !texto(m.velhoDestino)) throw falha('Informe o que foi feito com a peça retirada.');
+  let nfLinks = '';
+  if (tipo === 'entrada' && m.nfFotos) {
+    const ids = idsDeArquivos(m.nfFotos);
+    if (ids.length > NF_MAX_ARQUIVOS) throw falha('Anexe no máximo ' + NF_MAX_ARQUIVOS + ' arquivos da nota fiscal.');
+    const pasta = pastaNF();
+    ids.forEach(id => fotoDaPasta(id, pasta));
+    nfLinks = ids.map(id => 'https://drive.google.com/file/d/' + id + '/view').join('\n');
+  }
   let osNum = '';
   if (m.os) {
     const o = linhas(tabela('os')).find(x => x.numero === String(m.os).trim());
@@ -203,7 +214,7 @@ function registrar(m, nome) {
     velhoDestino: texto(m.velhoDestino, 80), fornecedor: texto(m.fornecedor, 120), nf: texto(m.nf, 40),
     valorUnit: m.valorUnit === '' || m.valorUnit == null ? '' : numero(m.valorUnit),
     previsao: m.previsao ? dataValida(m.previsao) : '', obs: texto(m.obs, 300), registradoPor: nome, criadoEm: agora(),
-    os: osNum
+    os: osNum, nfFotos: nfLinks
   };
   if (tipo === 'emprestimo') {
     const eid = novoId('E');
@@ -216,7 +227,7 @@ function registrar(m, nome) {
   }
   gravar(tabela('movs'), mov);
   if (osNum) osRegistrarAndamento(osNum, nome, 'Material: ' + fmt(qtd) + ' ' + it.unidade + ' de ' + it.nome + ' (' + TIPOS[tipo].toLowerCase() + ')');
-  return TIPOS[tipo] + (tipo === 'emprestimo' ? ' registrado: ' : ' registrada: ') + fmt(qtd) + ' ' + it.unidade + ' de ' + it.nome + (osNum ? ' · ' + osNum : '') + '.';
+  return TIPOS[tipo] + (tipo === 'emprestimo' ? ' registrado: ' : ' registrada: ') + fmt(qtd) + ' ' + it.unidade + ' de ' + it.nome + (osNum ? ' · ' + osNum : '') + (nfLinks ? ' · nota fiscal anexada' : '') + '.';
 }
 
 function devolver(r, nome) {
@@ -966,17 +977,39 @@ function osAtualizar(r, conta) {
   return msg;
 }
 
-// fotos: ficam numa pasta própria no Drive, ao lado da planilha
-function pastaFotos() {
+// fotos e notas fiscais: cada tipo numa pasta própria no Drive, ao lado da planilha
+function pastaDrive(chave, nome) {
   const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty('PASTA_FOTOS_OS');
+  const id = props.getProperty(chave);
   if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) {} }
   const arq = DriveApp.getFileById(SpreadsheetApp.getActive().getId());
   const pais = arq.getParents();
   const pai = pais.hasNext() ? pais.next() : DriveApp.getRootFolder();
-  const f = pai.createFolder('Fotos das OS - Estoque da Manutenção');
-  props.setProperty('PASTA_FOTOS_OS', f.getId());
+  const f = pai.createFolder(nome);
+  props.setProperty(chave, f.getId());
   return f;
+}
+function pastaFotos() { return pastaDrive('PASTA_FOTOS_OS', 'Fotos das OS - Estoque da Manutenção'); }
+function pastaNF() { return pastaDrive('PASTA_NF', 'Notas fiscais - Pier Gestão'); }
+
+function idsDeArquivos(v) {
+  const s = String(v || '');
+  const links = s.match(/\/d\/([A-Za-z0-9_-]{10,})/g);
+  if (links) return links.map(x => x.slice(3));
+  return s.split(/[\s,]+/).filter(x => /^[A-Za-z0-9_-]{10,}$/.test(x));
+}
+
+// foto ou PDF da nota fiscal de uma compra; o lançamento da entrada guarda o link
+function nfEnviar(r, conta) {
+  const tipos = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' };
+  const ext = tipos[r.mime];
+  if (!ext) throw falha('Envie a nota fiscal como foto (JPG ou PNG) ou PDF.');
+  const b64 = String(r.b64 || '');
+  if (!b64 || b64.length > 10000000) throw falha('O arquivo da nota fiscal está muito grande (máximo de 7 MB).');
+  const partes = ['NF', texto(r.nf, 30) || 'sem número', texto(r.fornecedor, 60), hoje()].filter(Boolean);
+  const nomeArq = partes.join(' - ').replace(/[\\/:*?"<>|]/g, '-') + ' - ' + conta.usuario + '.' + ext;
+  const f = pastaNF().createFile(Utilities.newBlob(Utilities.base64Decode(b64), r.mime, nomeArq));
+  return { id: f.getId(), mime: r.mime };
 }
 
 function osFoto(r, conta) {
@@ -1005,12 +1038,12 @@ function osFoto(r, conta) {
   return 'Foto anexada.';
 }
 
-function fotoDaPasta(id) {
+function fotoDaPasta(id, pastaObj) {
   id = String(id || '');
   if (!/^[A-Za-z0-9_-]{10,}$/.test(id)) throw falha('Foto inválida.');
   let f;
   try { f = DriveApp.getFileById(id); } catch (e) { throw falha('Foto não encontrada.'); }
-  const pasta = pastaFotos().getId();
+  const pasta = (pastaObj || pastaFotos()).getId();
   const pais = f.getParents();
   let dentro = false;
   while (pais.hasNext()) if (pais.next().getId() === pasta) dentro = true;
@@ -1018,8 +1051,9 @@ function fotoDaPasta(id) {
   return f;
 }
 
-function verFoto(id) {
-  const b = fotoDaPasta(id).getBlob();
+function verFoto(id) { return verArquivo(id, pastaFotos()); }
+function verArquivo(id, pasta) {
+  const b = fotoDaPasta(id, pasta).getBlob();
   return { mime: b.getContentType(), b64: Utilities.base64Encode(b.getBytes()) };
 }
 
@@ -1423,11 +1457,13 @@ function importarContagem(r, conta) {
 // Rode esta função uma vez pelo editor (Executar) para autorizar o acesso ao Drive das fotos.
 function autorizar() {
   pastaFotos();
+  pastaNF();
+  tabela('movs');
   tabela('os');
   tabela('dem');
   tabela('prev');
   abaPerfis();
-  Logger.log('Pronto: pasta de fotos, abas OS, Demandas e Preventivas e permissões verificadas.');
+  Logger.log('Pronto: pastas de fotos e de notas fiscais, abas OS, Demandas e Preventivas e permissões verificadas.');
 }
 
 function celula(v, isNum) {

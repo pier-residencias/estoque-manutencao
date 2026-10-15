@@ -235,6 +235,14 @@
         <label for="m-recebeu">Quem recebeu</label>
         <input class="input" id="m-recebeu" placeholder="Nome" list="dl-resp">
       </div>
+      <div class="field full" data-for="entrada">
+        <label for="m-nf-arq">Foto da nota fiscal</label>
+        <div class="nf-anexo" id="m-nf-box">
+          <label class="btn nf-btn"><input type="file" id="m-nf-arq" accept="image/*,application/pdf" multiple>Anexar foto ou PDF da nota</label>
+          <div class="nf-lista" id="m-nf-lista"></div>
+        </div>
+        <span class="hint" id="m-nf-hint">Pelo celular, dá para tirar a foto na hora. Até 4 arquivos por nota.</span>
+      </div>
 
       <div class="field full">
         <label for="m-obs">Observação</label>
