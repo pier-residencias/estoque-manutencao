@@ -28,7 +28,7 @@ const S = {
   tab:"painel", tipo:"saida", picked:null, iStatus:"", hTipo:"", histMes:mesDe(), ocupado:false, ultima:null,
   os:[], colab:[], oFiltro:"aberto", fotos:new Map(), dem:[], prev:[], dFiltro:"aberto", nfArq:[], nfAnexo:null, nfLida:null,
   iPer:{tipo:"", modo:"mes", mes:mesDe(), dia:hoje()}, mesesCarregados:[],
-  setores:["Manutenção"], setor:"Manutenção", empTodos:[]
+  setores:["Manutenção"], setor:"Manutenção", empTodos:[], locais:{}
 };
 const setorDe = x => (x && x.setor) || "Manutenção";
 const SETORES_PERM = [["Manutenção","setor_manutencao"],["Limpeza","setor_limpeza"]];
@@ -73,6 +73,7 @@ function aplicar(d){
   S.setores = d.setores && d.setores.length ? d.setores : ["Manutenção"];
   if (!S.setores.includes(S.setor)) { let salvo = ""; try { salvo = localStorage.getItem("estoque-setor") || ""; } catch(e){} S.setor = S.setores.includes(salvo) ? salvo : S.setores[0]; }
   S.emprestimos = S.empTodos.filter(doSetor);
+  S.locais = d.locais || {};
   renderSetorSel();
   S.movs = d.movs || [];
   S.os = d.os || [];
@@ -546,10 +547,38 @@ $("#f-mov").addEventListener("submit", async ev => {
     S.picked = null; renderPicked(); $("#m-busca").focus();
   }
 });
+function renderLocaisRapidos(){
+  const box = $("#m-locais"); if (!box) return;
+  const locais = S.locais[S.setor] || [], edita = can("itens_editar");
+  box.innerHTML = (locais.length ? locais.map(l => `<button type="button" class="chip" data-local="${esc(l)}">${esc(l)}</button>`).join("") : "")
+    + (edita ? `<button type="button" class="link small-link" id="m-locais-ed">${locais.length ? "editar lista" : "criar lista de locais"}</button>` : "");
+  box.hidden = !locais.length && !edita;
+  const ed = $("#m-locais-ed"); if (ed) ed.onclick = abrirLocais;
+}
+document.addEventListener("click", e => { const b = e.target.closest("#m-locais [data-local]"); if (b) { $("#m-destino").value = b.dataset.local; $$("#m-locais .chip").forEach(c => c.setAttribute("aria-pressed", c === b ? "true" : "false")); } });
+function abrirLocais(){
+  const lista = (S.locais[S.setor] || []).join("\n");
+  $("#modal-box").innerHTML = `
+    <h3>Locais de retirada · ${esc(S.setor)}</h3>
+    <form class="form" id="f-loc" novalidate>
+      <div class="field full"><label for="loc-txt">Um local por linha</label><textarea class="input" id="loc-txt" rows="12" placeholder="Bloco 1&#10;Portaria&#10;Salão de festas">${esc(lista)}</textarea>
+        <span class="hint">Eles aparecem como botões no campo Destino, em Registrar, para a equipe só tocar. Dá para digitar outro local quando precisar.</span></div>
+      <div class="full actions"><button class="btn primary" type="submit" id="loc-ok">Salvar lista</button><button class="btn" type="button" id="loc-no">Cancelar</button><span class="hint" id="loc-msg"></span></div>
+    </form>`;
+  $("#modal").hidden = false; $("#loc-txt").focus();
+  $("#loc-no").onclick = fecharModal;
+  $("#f-loc").addEventListener("submit", ev => {
+    ev.preventDefault();
+    const locais = $("#loc-txt").value.split("\n").map(x => x.trim()).filter(Boolean);
+    enviar($("#loc-ok"), $("#loc-msg"), "salvarLocais", {setor: S.setor, locais}, () => { fecharModal(); renderSugestoes(); });
+  });
+}
 function renderSugestoes(){
   const uniq = arr => [...new Set(arr.filter(Boolean).map(s=>String(s).trim()))].sort((a,b)=>a.localeCompare(b,"pt-BR")).slice(0,200);
   $("#dl-resp").innerHTML = uniq(S.movs.map(m=>m.responsavel)).map(v=>`<option value="${esc(v)}">`).join("");
-  $("#dl-dest").innerHTML = uniq(S.movs.map(m=>m.destino)).map(v=>`<option value="${esc(v)}">`).join("");
+  const locais = S.locais[S.setor] || [];
+  $("#dl-dest").innerHTML = [...new Set(locais.concat(uniq(S.movs.filter(doSetor).map(m=>m.destino))))].map(v=>`<option value="${esc(v)}">`).join("");
+  renderLocaisRapidos();
   $("#dl-forn").innerHTML = uniq(S.movs.map(m=>m.fornecedor)).map(v=>`<option value="${esc(v)}">`).join("");
 }
 
@@ -2020,7 +2049,49 @@ function lerPlanilha(wb){
       break;
     }
   });
+  if (melhor) Object.assign(melhor, lerHistorico(wb, melhor.aba));
   return melhor;
+}
+// abas de histórico (Entradas / Retiradas) com Data, Item e Quantidade
+function dataPlanilha(v){
+  if (v instanceof Date && !isNaN(v)) return iso(v);
+  if (typeof v === "number" && v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 864e5)); return d.toISOString().slice(0,10); }
+  const t = String(v ?? "").trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t); if (m) return m[1]+"-"+m[2]+"-"+m[3];
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(t); if (m) return (m[3].length===2 ? "20"+m[3] : m[3]) + "-" + m[2].padStart(2,"0") + "-" + m[1].padStart(2,"0");
+  return "";
+}
+function lerHistorico(wb, abaItens){
+  const hist = [], abas = [];
+  wb.SheetNames.forEach(nome => {
+    if (nome === abaItens) return;
+    const n = norm(nome), tipo = /entrad|compra/.test(n) ? "entrada" : /retirad|saida|consumo/.test(n) ? "saida" : "";
+    if (!tipo) return;
+    const linhas = XLSX.utils.sheet_to_json(wb.Sheets[nome], {header:1, raw:true, defval:""});
+    for (let i = 0; i < Math.min(15, linhas.length); i++) {
+      const h = linhas[i].map(cab), achar = t => h.findIndex(t);
+      const c = {data: achar(x => x === "data"), item: achar(x => x === "item" || x === "material"), qtd: achar(x => x.startsWith("quantidade") || x.startsWith("qtd")),
+        forn: achar(x => x.startsWith("fornecedor")), resp: achar(x => /^(recebido|retirado|responsavel|quem)/.test(x)), dest: achar(x => /^(local|destino|setor)/.test(x)),
+        obs: achar(x => x.startsWith("observ")), valor: achar(x => x.startsWith("valor"))};
+      if (c.data < 0 || c.item < 0 || c.qtd < 0) continue;
+      let n0 = 0;
+      for (const r of linhas.slice(i+1)) {
+        const nomeIt = String(r[c.item] ?? "").trim(), q = typeof r[c.qtd] === "number" ? r[c.qtd] : pQtd(r[c.qtd]), d = dataPlanilha(r[c.data]);
+        if (!nomeIt || !(q > 0) || !d) continue;
+        const obs = c.obs >= 0 ? String(r[c.obs] ?? "").trim() : "";
+        const mv = c.valor >= 0 && r[c.valor] !== "" ? r[c.valor] : ((/R\$\s*([\d.]+,\d{2})/.exec(obs) || [])[1] || "");
+        const fornNf = c.forn >= 0 ? String(r[c.forn] ?? "").trim() : "";
+        const nf = (/\bNF\s*[:nº°]*\s*(\d+)/i.exec(fornNf) || [])[1] || "";
+        hist.push({tipo, data:d, nome:nomeIt, qtd:q, fornecedor: fornNf.replace(/\s*[-–\/]?\s*NF\s*[:nº°]*\s*\d+/i, "").trim(), nf,
+          responsavel: c.resp >= 0 ? String(r[c.resp] ?? "").trim() : "", destino: c.dest >= 0 ? String(r[c.dest] ?? "").trim() : "", obs,
+          valorUnit: typeof mv === "number" ? String(mv).replace(".", ",") : String(mv)});
+        n0++;
+      }
+      if (n0) abas.push(nome);
+      break;
+    }
+  });
+  return {hist, histAbas: abas};
 }
 function abrirImportacao(){
   if (!can("itens_editar")) return;
@@ -2057,6 +2128,13 @@ function abrirImportacao(){
         <label class="perm"><input type="radio" name="imp-modo" value="atualizar" ${modo==="atualizar"?"checked":""}> Manter na lista (só atualizar e acrescentar)</label>
         <label class="perm"><input type="radio" name="imp-modo" value="substituir" ${modo==="substituir"?"checked":""}> Tirar da lista: a planilha passa a ser o cadastro completo</label>
       </fieldset>
+      ${lido.hist && lido.hist.length ? (() => {
+        const ent = lido.hist.filter(h => h.tipo === "entrada"), sai = lido.hist.filter(h => h.tipo === "saida");
+        const nomes = new Set(lido.itens.map(l => norm(l.nome).replace(/\s+/g," ").trim()));
+        const fora = lido.hist.filter(h => !nomes.has(norm(h.nome).replace(/\s+/g," ").trim())).length;
+        const datas = lido.hist.map(h => h.data).sort();
+        return `<label class="perm imp-hist"><input type="checkbox" id="imp-hist" checked> <span><b>Lançar também o histórico da planilha</b> (abas ${esc(lido.histAbas.join(" e "))}): ${ent.length} ${ent.length===1?"compra":"compras"}${sai.length ? ` e ${sai.length} ${sai.length===1?"retirada":"retiradas"}` : ""}, de ${fData(datas[0])} a ${fData(datas[datas.length-1])}, com data, fornecedor e valor. O saldo final de cada item continua igual ao da planilha.${fora ? ` ${fora} ${fora===1?"linha não corresponde":"linhas não correspondem"} a nenhum item e ${fora===1?"fica":"ficam"} de fora.` : ""}</span></label>`;
+      })() : ""}
       ${semCod ? `<p class="hint">${semCod} itens sem código vão receber um código automático.</p>` : ""}
       ${duvidas.length ? `<p class="hint">${duvidas.length} itens têm "(?)" no nome, marcando leitura duvidosa. Dá para corrigir depois em Itens.</p>` : ""}
       ${modo==="substituir" && saem.length ? `<p class="notice warn">Vão sair da lista: ${esc(saem.slice(0,12).map(i=>i.nome).join(", "))}${saem.length>12?` e mais ${saem.length-12}`:""}. O histórico deles continua guardado e a planilha guarda uma cópia da lista atual.</p>` : ""}
@@ -2084,7 +2162,9 @@ function abrirImportacao(){
   $("#f-imp").addEventListener("submit", async ev => {
     ev.preventDefault(); if (!lido) return;
     const modo = ($("input[name=imp-modo]:checked") || {}).value || "atualizar";
-    await enviar($("#imp-ok"), $("#imp-msg"), "importarContagem", {linhas: lido.itens, modo, motivo: $("#imp-mot").value.trim(), setor: S.setor}, () => { fecharModal(); setTab("itens"); });
+    const comHist = lido.hist && lido.hist.length && $("#imp-hist") && $("#imp-hist").checked;
+    const extraHist = comHist ? {historico: lido.hist, dataAjuste: lido.hist.map(h => h.data).sort()[0]} : {};
+    await enviar($("#imp-ok"), $("#imp-msg"), "importarContagem", Object.assign({linhas: lido.itens, modo, motivo: $("#imp-mot").value.trim(), setor: S.setor}, extraHist), () => { fecharModal(); setTab("itens"); });
   });
 }
 $("#i-importar").addEventListener("click", abrirImportacao);

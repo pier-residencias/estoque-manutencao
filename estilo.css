@@ -393,3 +393,6 @@ td.mono{white-space:nowrap}
 .setor-nome{color:var(--accent-ink)}
 .me-setor{font-size:.8rem;color:var(--muted);margin-top:2px}
 .me-setor b{color:var(--accent-ink)}
+.locais-rapidos{margin-top:6px;gap:6px;align-items:center}
+.locais-rapidos .chip{padding:4px 10px;font-size:.8rem}
+.imp-hist{background:var(--accent-soft);border-radius:8px;padding:10px 12px;margin:0 0 10px}

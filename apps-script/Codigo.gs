@@ -108,6 +108,43 @@ function setoresDe(conta) {
 function exigirSetor(conta, setor) {
   if (conta && setoresDe(conta).indexOf(setor) < 0) throw falha('Seu perfil não tem acesso aos itens do setor ' + setor + '.');
 }
+// locais de retirada sugeridos na tela Registrar; a administração edita a lista de cada setor
+const LOCAIS_PADRAO = {
+  'Limpeza': ['Bloco 1', 'Bloco 2', 'Bloco 3', 'Bloco 4', 'Bloco 5', 'Bloco 6', 'Portaria', 'Administração', 'Salão de festas',
+    'Piscina', 'Sauna', 'Academia', 'Deck', 'Churrasqueira', 'Quadra', 'Vestiários', 'Garagem', 'Área externa', 'Copa dos funcionários'],
+  'Manutenção': []
+};
+function abaConfig() {
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName('Config');
+  if (!sh) { sh = ss.insertSheet('Config'); sh.getRange(1, 1, 1, 3).setValues([['Configuração', 'Valor', 'Para que serve']]).setFontWeight('bold'); }
+  return sh;
+}
+function lerLocais(setor) {
+  const vals = abaConfig().getDataRange().getValues();
+  const chave = 'Locais - ' + setor;
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).trim() === chave) return String(vals[i][1] || '').split('\n').map(x => x.trim()).filter(Boolean);
+  }
+  return (LOCAIS_PADRAO[setor] || []).slice();
+}
+function salvarLocais(r, conta) {
+  const setor = setorDe({ setor: r.setor });
+  exigirSetor(conta, setor);
+  const vistos = {};
+  const lista = (Array.isArray(r.locais) ? r.locais : []).map(x => texto(x, 60)).filter(x => {
+    const k = x.toLowerCase(); if (!x || vistos[k]) return false; vistos[k] = true; return true;
+  }).slice(0, 150);
+  const sh = abaConfig();
+  const vals = sh.getDataRange().getValues();
+  const chave = 'Locais - ' + setor;
+  let row = 0;
+  for (let i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() === chave) row = i + 1;
+  if (!row) row = Math.max(sh.getLastRow(), 1) + 1;
+  sh.getRange(row, 1, 1, 3).setNumberFormat('@').setValues([[chave, lista.join('\n'), 'Locais de retirada do setor ' + setor + ', um por linha. Dá para editar no site, em Registrar.']]);
+  return 'Lista de locais da ' + setor + ' salva (' + lista.length + ').';
+}
+
 function prefixoSetor(setor) { const x = SETORES.find(s => s[0] === setor); return x ? x[2] : 'MAN-'; }
 
 const DEM_STATUS = { pendente: 'Pendente', andamento: 'Em andamento', concluida: 'Concluída', cancelada: 'Cancelada' };
@@ -164,6 +201,7 @@ function doPost(e) {
         case 'demAtualizar': msg = demAtualizar(req, conta); break;
         case 'salvarPreventiva': pode('dem_delegar'); msg = salvarPreventiva(req.prev || {}, conta); break;
         case 'excluirPreventiva': pode('dem_delegar'); msg = excluirPreventiva(req.id); break;
+        case 'salvarLocais': pode('itens_editar'); msg = salvarLocais(req, conta); break;
         case 'importarContagem': pode('itens_editar'); msg = importarContagem(req, conta); break;
         case 'devolver': pode('devolver'); msg = devolver(req, nome, conta); break;
         case 'salvarItem': pode((req.item || {}).id ? 'itens_editar' : 'itens_cadastrar'); msg = salvarItem(req, nome, conta); break;
@@ -371,7 +409,8 @@ function dados(meses, conta) {
     itens: V.itens.map(limpa),
     emprestimos: linhas(tabela('emp')).filter(V.ve).map(e => V.marca(limpa(e))),
     movs: todas.filter(m => ms.indexOf(String(m.data).slice(0, 7)) >= 0 && V.ve(m)).map(m => V.marca(limpa(m))),
-    setores: V.setores
+    setores: V.setores,
+    locais: V.setores.reduce((m, st) => { m[st] = lerLocais(st); return m; }, {})
   };
   const p = (conta && conta.perms) || {};
   if (p.os_ver || p.os_abrir || p.os_atender || p.os_gerenciar) {
@@ -1421,8 +1460,31 @@ function importarContagem(r, conta) {
   const usados = {}, novos = [], movs = [], mantidas = {};
   let atualizados = 0, criados = 0, iguais = 0;
   const ag = agora(), dia = hoje();
-  const mov = (it, delta, mot) => movs.push({
-    id: novoId('M'), data: dia, tipo: TIPOS.ajuste, itemId: it.id, itemCodigo: it.codigo, itemNome: it.nome,
+
+  // histórico da planilha (compras e retiradas já anotadas lá): entra com a data original,
+  // e o estoque inicial do item é o saldo menos esse histórico, para o saldo final continuar igual
+  const MARCA = 'Histórico da planilha';
+  const normNome = x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const hist = (Array.isArray(r.historico) ? r.historico : []).slice(0, 5000).map(h => ({
+    tipo: h.tipo === 'saida' ? 'saida' : 'entrada', data: dataValida(h.data), nome: texto(h.nome, 160), qtd: numero(h.qtd),
+    fornecedor: texto(h.fornecedor, 120), nf: texto(h.nf, 40), valorUnit: h.valorUnit === '' || h.valorUnit == null ? '' : numero(h.valorUnit),
+    responsavel: texto(h.responsavel, 80), destino: texto(h.destino, 120), obs: texto(h.obs, 250)
+  })).filter(h => h.nome && h.qtd > 0 && isFinite(h.qtd));
+  const linhaPorNome = {};
+  entrada.forEach((l, k) => { const kn = normNome(l.nome); if (!(kn in linhaPorNome)) linhaPorNome[kn] = k; });
+  const histPorLinha = {};
+  let histSemItem = 0;
+  hist.forEach(h => { const k = linhaPorNome[normNome(h.nome)]; if (k === undefined) { histSemItem++; return; } (histPorLinha[k] = histPorLinha[k] || []).push(h); });
+  const jaLancado = {};
+  if (hist.length) linhas(tabela('movs')).forEach(m => { if (String(m.obs).indexOf(MARCA) === 0) jaLancado[[m.itemId, m.tipo, m.data, arred(Number(m.qtd))].join('|')] = true; });
+  const histNovo = (k, itemId) => (histPorLinha[k] || []).filter(h => !jaLancado[[itemId, h.tipo, h.data, arred(h.qtd)].join('|')]);
+  const somaHist = lista => lista.reduce((t, h) => t + (h.tipo === 'entrada' ? h.qtd : -h.qtd), 0);
+  const dataAjuste = /^\d{4}-\d{2}-\d{2}$/.test(String(r.dataAjuste || '')) && String(r.dataAjuste) < dia ? String(r.dataAjuste) : dia;
+  const pendentes = [];
+  let histLancado = 0;
+
+  const mov = (it, delta, mot, data) => movs.push({
+    id: novoId('M'), data: data || dia, tipo: TIPOS.ajuste, itemId: it.id, itemCodigo: it.codigo, itemNome: it.nome,
     qtd: Math.abs(arred(delta)), unidade: it.unidade, delta: arred(delta), motivo: mot, obs: 'Importação de inventário',
     registradoPor: conta.nome, criadoEm: ag
   });
@@ -1452,11 +1514,11 @@ function importarContagem(r, conta) {
       if (minimo !== null && minimo >= 0) row[I.minimo] = minimo;
       const antes = Number(row[I.qtd]) || 0;
       row[I.atualizadoEm] = ag;
-      if (arred(qtd) !== arred(antes)) {
-        row[I.qtd] = qtd; atualizados++;
-        mov({ id: String(row[I.id]), codigo: String(row[I.codigo]), nome: String(row[I.nome]), unidade: String(row[I.unidade]) },
-          qtd - antes, motivo + ' (de ' + fmt(antes) + ' para ' + fmt(qtd) + ')');
-      } else iguais++;
+      const itx = { id: String(row[I.id]), codigo: String(row[I.codigo]), nome: String(row[I.nome]), unidade: String(row[I.unidade]) };
+      const hn = histNovo(k, itx.id), base = arred(qtd - somaHist(hn));
+      if (hn.length) pendentes.push({ it: itx, lista: hn });
+      if (arred(base) !== arred(antes)) mov(itx, base - antes, motivo + ' (de ' + fmt(antes) + ' para ' + fmt(base) + ')');
+      if (arred(qtd) !== arred(antes)) { row[I.qtd] = qtd; atualizados++; } else iguais++;
     } else {
       if (!codigo) { maxNum++; codigo = prefixo + ('000' + maxNum).slice(prefixo === 'MAN-' ? -4 : -3); }
       const row = new Array(ti.ncol).fill('');
@@ -1467,9 +1529,23 @@ function importarContagem(r, conta) {
       row[I.qtd] = qtd; row[I.minimo] = minimo !== null && minimo >= 0 ? minimo : 0;
       row[I.criadoEm] = ag; row[I.atualizadoEm] = ag; row[I.setor] = setor;
       novos.push(row); criados++;
-      if (qtd > 0) mov({ id, codigo, nome, unidade: row[I.unidade] }, qtd, motivo + ' (item novo)');
+      const itx = { id, codigo, nome, unidade: row[I.unidade] };
+      const hn = histNovo(k, id), base = arred(qtd - somaHist(hn));
+      if (hn.length) pendentes.push({ it: itx, lista: hn });
+      if (base !== 0) mov(itx, base, motivo + ' (item novo)', hn.length ? dataAjuste : dia);
     }
   });
+
+  // lançamentos do histórico, com a data, o fornecedor e o valor que estavam na planilha
+  pendentes.forEach(p => p.lista.forEach(h => {
+    movs.push({
+      id: novoId('M'), data: h.data, tipo: TIPOS[h.tipo], itemId: p.it.id, itemCodigo: p.it.codigo, itemNome: p.it.nome,
+      qtd: h.qtd, unidade: p.it.unidade, delta: h.tipo === 'entrada' ? h.qtd : -h.qtd,
+      responsavel: h.responsavel, destino: h.destino, fornecedor: h.fornecedor, nf: h.nf, valorUnit: h.valorUnit,
+      obs: (MARCA + (h.obs ? ': ' + h.obs : '')).slice(0, 300), registradoPor: conta.nome, criadoEm: ag
+    });
+    histLancado++;
+  }));
 
   let removidos = 0;
   let final = vals;
@@ -1518,6 +1594,8 @@ function importarContagem(r, conta) {
   if (criados) partes.push(criados + ' novos');
   if (iguais) partes.push(iguais + ' sem mudança');
   if (removidos) partes.push(removidos + ' saíram do cadastro');
+  if (histLancado) partes.push(histLancado + ' lançamentos do histórico da planilha');
+  if (histSemItem) partes.push(histSemItem + ' linhas do histórico sem item correspondente (não lançadas)');
   return 'Inventário de ' + setor + ' importado: ' + partes.join(', ') + '. Cópia da lista anterior guardada na aba oculta "' + nomeCopia + '".';
 }
 
