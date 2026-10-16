@@ -161,6 +161,16 @@ Regras de integridade:
 - **Repetição**: a mesma planilha enviada de novo pede confirmação. Item com ajuste pendente ou bloqueado é pulado (não ganha segunda solicitação). Aprovação parcial do lote é segura: o que foi aprovado não volta, o que foi rejeitado volta na próxima importação, o pendente é pulado.
 - **Falha no meio**: tudo é validado antes da primeira gravação; a aba Itens é gravada numa única escrita (sem apagar antes); solicitações e conferências, cada uma numa escrita. Se o script parar no meio, a verificação automática avisa e basta importar a mesma planilha de novo: os itens já criados são reconhecidos, as solicitações não se repetem e nada é lançado em dobro.
 
+## Carga de dados fictícios da homologação (`apps-script/Homologacao.gs`)
+
+Arquivo **só para o Apps Script da planilha "PIER GESTÃO - HOMOLOGAÇÃO"**. Nunca cole no Apps Script oficial e não leve para a produção. O site não consegue chamar essas funções: elas rodam só pelo editor.
+
+O que faz: esvazia Itens, Movimentacoes, Emprestimos, Contagens, OS, Demandas, Preventivas, Pendencias, Auditoria e Acessos (fica o cabeçalho, os formatos, as validações e as proteções), apaga as abas ocultas "Itens (cópia de …)", troca os locais da Config por "Almoxarifado Teste", "Área Técnica Teste" e "Oficina Teste", zera o estado interno (retrato de saldos, bloqueios, sessões, tentativas de login, marcas de importação) e cadastra três materiais fictícios no setor Manutenção (MAN-0001 20 un, MAN-0002 10 un, MAN-0003 15 un), cada um com o lançamento "Saldo inicial da carga de homologação" e registro na Auditoria. Não mexe em Usuarios, Perfis, outras linhas da Config, no segredo das senhas (`SEG_SEGREDO`), nas pastas configuradas nem em arquivo nenhum do Drive. Grava `PEND_SEMEADA` para a lista de pendências embutida no código não ser recriada.
+
+Travas (todas precisam passar): ID diferente do da planilha oficial; nome com "HOMOLOGAÇÃO"; propriedade `AMBIENTE` = `homologacao`; propriedade `HOMOLOG_PLANILHA_ID` = ID da própria planilha; na aba Usuarios só `admin.teste1`, `admin.teste2`, `manut.teste` (ativos, senha já protegida, ID da conta, sem telefone) e `limpeza.teste` (desativado, opcional); cabeçalhos de todas as abas completos; `SEG_SEGREDO` e as duas pastas de teste presentes.
+
+Uso: `simularCargaHomologacao()` só lê e mostra no registro o que será feito e um código (vale 15 minutos) → crie a propriedade `CONFIRMAR_CARGA` com o código → `executarCargaHomologacao()`. Se a planilha mudar depois da simulação, o código deixa de valer. Concluída, a marca `HOMOLOG_CARGA_FEITA` recusa novas execuções (para repetir de propósito, apague a marca). Se parar no meio, fica `HOMOLOG_CARGA_ANDAMENTO`: simule e execute de novo; a rotina limpa antes de carregar e usa IDs fixos, sem duplicar saldos nem lançamentos.
+
 ## Levar a homologação para a produção (só com autorização expressa)
 
 Teste antes numa **cópia** da planilha:
@@ -170,7 +180,7 @@ Teste antes numa **cópia** da planilha:
 
 Na produção, com autorização:
 1. Faça uma cópia de segurança da planilha oficial e guarde o código atual do Apps Script.
-2. Leve a branch para a `main` mantendo o `config.js` da `main`.
+2. Leve a branch para a `main` mantendo o `config.js` da `main` e **sem** o arquivo `apps-script/Homologacao.gs`.
 3. Cole o `Codigo.gs` novo no Apps Script oficial e rode `autorizar` (cria a aba Contagens, as colunas novas, os IDs das contas e o primeiro retrato dos saldos). O Google vai pedir autorização nova, porque o código agora pode criar acionadores.
 4. Implantar → Gerenciar implantações → editar → Nova versão (o link não muda).
 5. Acionador e proteções: só se autorizados. Crie a propriedade do script `LIBERAR_ACIONADOR_OFICIAL` = `sim`, rode `instalarRecuperacao`; rode `protegerPlanilha` e `verificarProtecao`.
