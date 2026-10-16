@@ -211,7 +211,7 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
-const VERSAO = '2026-10-17 inventário: recuperação automática e integridade (homologação)';
+const VERSAO = '2026-10-17b inventário: recuperação automática, integridade e acionador protegido (homologação)';
 
 function doGet() {
   return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
@@ -3102,17 +3102,45 @@ function itemLiberar(r, conta) {
   return 'Item liberado: ' + det + '.';
 }
 
-// Instala o acionador de tempo da verificação automática. Rode pelo editor SÓ na cópia de homologação.
-// Na planilha oficial ele se recusa, a menos que a propriedade LIBERAR_ACIONADOR_OFICIAL seja "sim"
-// (definida à mão, depois da autorização para levar a versão à produção).
+// Onde o acionador pode ser instalado. Só lê; nada é removido nem criado aqui.
+//  - Planilha oficial: só com autorização explícita (propriedade LIBERAR_ACIONADOR_OFICIAL = "sim",
+//    criada à mão depois da autorização para levar a versão à produção) e sem a marca de homologação.
+//  - Qualquer outra planilha: só a cópia de homologação, com as quatro conferências:
+//    AMBIENTE exatamente "homologacao", HOMOLOG_PLANILHA_ID igual ao ID da planilha ativa,
+//    nome com "HOMOLOGAÇÃO" e ID diferente do da oficial.
+function ambienteDoAcionador() {
+  const ss = SpreadsheetApp.getActive();
+  const props = PropertiesService.getScriptProperties();
+  const id = String(ss.getId());
+  const nome = String(ss.getName() || '');
+  const ambiente = props.getProperty('AMBIENTE');
+  const erros = [];
+  if (id === PLANILHA_OFICIAL) {
+    if (ambiente === 'homologacao') erros.push('A planilha oficial está com a propriedade AMBIENTE = "homologacao". Corrija as propriedades antes de qualquer instalação.');
+    if (props.getProperty('LIBERAR_ACIONADOR_OFICIAL') !== 'sim') erros.push('Esta é a planilha oficial do condomínio. O acionador só pode ser instalado aqui com autorização (propriedade LIBERAR_ACIONADOR_OFICIAL = "sim"; veja o README).');
+    return { modo: 'produção', id, nome, erros };
+  }
+  if (ambiente !== 'homologacao') erros.push('A propriedade AMBIENTE não é exatamente "homologacao" (está ' + (ambiente === null ? 'ausente' : '"' + ambiente + '"') + ').');
+  if (props.getProperty('HOMOLOG_PLANILHA_ID') !== id) erros.push('A propriedade HOMOLOG_PLANILHA_ID não corresponde ao ID desta planilha (' + id + ').');
+  if (nome.toUpperCase().indexOf('HOMOLOGAÇÃO') < 0) erros.push('O nome da planilha ("' + nome + '") não contém "HOMOLOGAÇÃO".');
+  if (id === PLANILHA_OFICIAL) erros.push('O ID é o da planilha oficial.');
+  return { modo: 'homologação', id, nome, erros };
+}
+
+// Instala o acionador de tempo da verificação automática. Rode pelo editor, à mão.
+// Todas as conferências de ambienteDoAcionador() vêm antes de remover ou criar qualquer acionador.
 function instalarRecuperacao() {
-  if (SpreadsheetApp.getActive().getId() === PLANILHA_OFICIAL && PropertiesService.getScriptProperties().getProperty('LIBERAR_ACIONADOR_OFICIAL') !== 'sim') {
-    throw new Error('Esta é a planilha oficial do condomínio. O acionador não foi instalado: só com autorização (veja o README).');
+  const amb = ambienteDoAcionador();
+  if (amb.erros.length) {
+    const txt = 'Acionador NÃO instalado. Nenhum acionador foi removido ou criado.\n - ' + amb.erros.join('\n - ');
+    Logger.log(txt);
+    throw new Error(txt);
   }
   removerRecuperacao();
   ScriptApp.newTrigger('recuperarOperacoesPendentes').timeBased().everyMinutes(RECUP.minutos).create();
+  auditar(SISTEMA, 'Verificação automática', 'Acionador instalado (' + amb.modo + ', a cada ' + RECUP.minutos + ' minutos) na planilha ' + amb.nome + ' (' + amb.id + ').', 'OK');
   const r = recuperarOperacoesPendentes();
-  Logger.log('Verificação automática instalada: roda a cada ' + RECUP.minutos + ' minutos. Primeira rodada: ' + r);
+  Logger.log('Verificação automática instalada (' + amb.modo + '): roda a cada ' + RECUP.minutos + ' minutos. Primeira rodada: ' + r);
   return r;
 }
 function ScriptAppTemAcionador() {
