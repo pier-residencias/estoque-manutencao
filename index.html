@@ -416,7 +416,7 @@
     <div class="sec-head"><h2 class="sec">Usuários e permissões</h2><span class="muted">Quem entra no sistema e o que cada perfil pode fazer.</span></div>
     <div class="panel">
       <div class="sec-head" style="margin-bottom:10px"><h3>Colaboradores</h3><button class="btn primary small" id="q-novo-u">Novo colaborador</button></div>
-      <div class="tablebox flat"><table><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Situação</th><th class="hide-m">WhatsApp</th><th class="hide-s">Senha</th><th></th></tr></thead><tbody id="q-usuarios"></tbody></table></div>
+      <div class="tablebox flat"><table><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Situação</th><th class="hide-m">WhatsApp</th><th class="hide-s">Acesso</th><th></th></tr></thead><tbody id="q-usuarios"></tbody></table></div>
     </div>
     <div class="panel">
       <div class="sec-head" style="margin-bottom:10px"><h3>Perfis e permissões</h3><button class="btn small" id="q-novo-p">Novo perfil</button></div>
@@ -427,16 +427,18 @@
 
   <!-- HISTÓRICO DE ACESSOS (menu Administração, só perfil Administração) -->
   <section id="t-acessos" hidden>
-    <div class="sec-head"><h2 class="sec">Histórico de acessos</h2><span class="muted">Cada entrada no sistema, com data, hora, setor escolhido e aparelho. Tentativas com senha errada aparecem em vermelho.</span></div>
+    <div class="sec-head"><h2 class="sec">Histórico de acessos</h2><span class="muted" id="ac-desc">Cada entrada no sistema, com data, hora, setor escolhido e aparelho. Tentativas com senha errada aparecem em vermelho.</span></div>
+    <div class="ac-modo" id="ac-modo" role="group" aria-label="O que mostrar"><button type="button" data-m="entradas" aria-pressed="true">Entradas no sistema</button><button type="button" data-m="alteracoes" aria-pressed="false">Alterações</button></div>
     <div class="ac-resumo" id="ac-resumo"></div>
     <div class="toolbar">
       <select class="input" id="ac-pessoa" aria-label="Pessoa"><option value="">Todas as pessoas</option></select>
       <select class="input" id="ac-periodo" aria-label="Período"><option value="7">Últimos 7 dias</option><option value="30" selected>Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="0">Tudo</option></select>
-      <select class="input" id="ac-tipo" aria-label="Tipo"><option value="">Todos os tipos</option><option value="login">Entrou com senha</option><option value="retorno">Voltou ao sistema</option><option value="falha">Senha errada</option></select>
+      <select class="input" id="ac-tipo" aria-label="Tipo"><option value="">Todos os tipos</option><option value="login">Entrou com senha</option><option value="retorno">Voltou ao sistema</option><option value="falha">Senha errada</option><option value="bloqueado">Login bloqueado</option></select>
+      <input class="input" id="ac-busca" type="search" placeholder="Buscar ação ou detalhe" hidden>
       <button class="btn" type="button" id="ac-atualizar">Atualizar</button>
     </div>
     <div class="tablebox"><table>
-      <thead><tr><th>Data e hora</th><th>Pessoa</th><th class="hide-s">Perfil</th><th>Entrou por</th><th class="hide-m">Aparelho</th><th>Tipo</th></tr></thead>
+      <thead id="ac-head"><tr><th>Data e hora</th><th>Pessoa</th><th class="hide-s">Perfil</th><th>Entrou por</th><th class="hide-m">Aparelho</th><th>Tipo</th></tr></thead>
       <tbody id="ac-body"><tr><td colspan="6"><div class="empty">Carregando…</div></td></tr></tbody>
     </table></div>
   </section>
@@ -464,7 +466,7 @@
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script src="config.js"></script>
-<script src="nfe.js?v=20261015i"></script>
-<script src="app.js?v=20261015i"></script>
+<script src="nfe.js?v=20261015s"></script>
+<script src="app.js?v=20261015s"></script>
 </body>
 </html>

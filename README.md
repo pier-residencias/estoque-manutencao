@@ -87,6 +87,15 @@ O link do Apps Script aberto no navegador mostra a versão do código instalado 
 
 A permissão é **Pendências** (grupo Administração). Na primeira vez que a aba Pendencias é aberta, ela recebe os 74 itens da lista de 13/10/2026 com a situação do relatório de 14/10; isso acontece uma vez só.
 
+## Segurança
+
+- **Senhas protegidas.** A coluna Senha da aba Usuarios guarda só um código (hash `h1$…` com sal próprio por pessoa, 3.000 rodadas de HMAC-SHA256 e um segredo que fica nas propriedades do script, fora da planilha). A tela de usuários não mostra mais senhas: ao editar, o campo **Nova senha** em branco mantém a atual. Senhas novas têm no mínimo 6 caracteres. Se for preciso redefinir uma senha direto na planilha, basta digitá-la na coluna Senha: ela vale uma vez em texto e vira código na primeira entrada. A função `autorizar` converte todas as senhas antigas.
+- **Sessões.** Ao entrar, o servidor devolve um código de sessão; o aparelho guarda só esse código, nunca a senha. A sessão termina depois de 24 h sem uso ou 7 dias depois da entrada. **Sair** encerra a sessão no servidor. Trocar a senha ou bloquear o login encerra os acessos abertos daquela pessoa, e em Usuários há o botão **Encerrar acessos abertos**. A tabela de colaboradores mostra quantos aparelhos estão conectados.
+- **Permissões no servidor.** Toda ação confere a permissão no Apps Script. Perfil sem nenhuma permissão do estoque (como o Síndico) não recebe itens nem movimentações. Só login do perfil Administração cria ou altera logins de acesso total e dá a um perfil acesso a Usuários ou ao Histórico de acessos.
+- **Proteção de login.** 5 senhas erradas seguidas bloqueiam o login por 15 minutos (cada erro também demora quase 1 s para responder). A tela de usuários mostra **Bloqueado por tentativas** e o botão **Liberar o login**. Os ajustes ficam no objeto `SEG` do Codigo.gs.
+- **Histórico de auditoria.** A aba **Auditoria** registra cada alteração (quem, perfil, ação, detalhe, data e hora), as tentativas sem permissão (resultado Negado), bloqueios de login, saídas e cada nota fiscal aberta. Senhas nunca são gravadas. Em **Administração → Histórico de acessos**, a opção **Alterações** mostra esse registro com busca e filtro por pessoa. As abas Auditoria e Acessos ficam protegidas: só o dono da planilha edita.
+- **Arquivos.** Fotos das OS e notas fiscais só saem pelo sistema, para quem tem permissão. A função `autorizar` confere o compartilhamento da planilha, das duas pastas e de cada arquivo, fecha qualquer link aberto e registra o resultado na Auditoria.
+
 ## Nota fiscal das compras
 
 Em **Registrar → Entrada**, o campo **Foto da nota fiscal** anexa a foto (ou o PDF) da nota da compra, até 4 arquivos. Os arquivos ficam na pasta "Notas fiscais - Pier Gestão" no Drive, ao lado da planilha, e o link vai na coluna **Foto da NF** da aba Movimentacoes. Para lançar outros itens da mesma nota, o fornecedor e o número continuam preenchidos e a mesma foto vai junto, sem enviar de novo. No **Histórico**, o link **ver nota** abre o arquivo.

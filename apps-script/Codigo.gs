@@ -109,6 +109,15 @@ const ABAS = {
     ],
     num: ['ordem']
   },
+  audit: {
+    nome: 'Auditoria',
+    criar: true,
+    cols: [
+      ['id', 'ID'], ['quando', 'Data e hora'], ['usuario', 'Usuário'], ['nome', 'Nome'], ['perfil', 'Perfil'],
+      ['acao', 'Ação'], ['detalhe', 'Detalhe'], ['resultado', 'Resultado']
+    ],
+    num: []
+  },
   acessos: {
     nome: 'Acessos',
     criar: true,
@@ -186,36 +195,62 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
-const VERSAO = '2026-10-15 prazo bloqueado';
+const VERSAO = '2026-10-15 segurança';
 
 function doGet() {
   return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
 }
 
 function doPost(e) {
+  AUDIT_DET = '';
   let req;
   try { req = JSON.parse(e.postData.contents); }
   catch (err) { return json({ ok: false, erro: 'Pedido inválido.' }); }
+  let conta = null;
   try {
-    const conta = autenticar(req.usuario, req.senha);
-    if (!conta) {
-      if (req.acao === 'entrar' && req.registro && req.registro.motivo === 'login') registrarAcesso(null, req.usuario, req.registro);
-      return json({ ok: false, codigo: 'senha', erro: 'Usuário ou senha incorretos.' });
+    let token = '';
+    if (req.acao === 'entrar' && req.senha !== undefined) {
+      // entrada com usuário e senha: confere bloqueio por tentativas, a senha (com hash) e abre uma sessão
+      const usuarioDig = String(req.usuario || '').trim().toLowerCase();
+      const bloq = loginBloqueado(usuarioDig);
+      if (bloq) {
+        registrarAcesso(null, usuarioDig, Object.assign({}, req.registro || {}, { motivo: 'bloqueado' }));
+        return json({ ok: false, codigo: 'bloqueado', erro: 'Muitas tentativas com senha errada. Este login está bloqueado por mais ' + bloq + ' min. Tente depois ou peça para a administração liberar.' });
+      }
+      conta = autenticar(usuarioDig, req.senha);
+      if (!conta) {
+        const travou = registrarFalhaLogin(usuarioDig);
+        registrarAcesso(null, usuarioDig, Object.assign({}, req.registro || {}, { motivo: 'falha' }));
+        if (travou) auditar({ usuario: usuarioDig, nome: '', perfil: '' }, 'Login bloqueado', SEG.tentativas + ' senhas erradas seguidas; bloqueado por ' + SEG.bloqueioMin + ' min.', 'Negado');
+        return json({ ok: false, codigo: 'senha', erro: travou ? 'Senha errada de novo. Por segurança, este login ficou bloqueado por ' + SEG.bloqueioMin + ' min.' : 'Usuário ou senha incorretos.' });
+      }
+      limparFalhasLogin(usuarioDig);
+      token = abrirSessao(conta, req.registro);
+    } else {
+      conta = contaDaSessao(req.token);
+      // código 'senha' também faz as versões antigas do site voltarem para a tela de entrada
+      if (!conta) return json({ ok: false, codigo: 'senha', sessao: 'fim', erro: 'Sua sessão terminou. Entre de novo.' });
     }
     const nome = conta.nome;
-    const base = { ok: true, nome, perfil: conta.perfil, perms: conta.perms };
-    const pode = p => { if (!conta.perms[p]) throw falha('Seu perfil não tem permissão para isso.'); };
-    const algum = ps => { if (!ps.some(p => conta.perms[p])) throw falha('Seu perfil não tem permissão para isso.'); };
+    const base = { ok: true, nome, perfil: conta.perfil, perms: conta.perms, usuario: conta.usuario };
+    const negar = () => { const e = falha('Seu perfil não tem permissão para isso.'); e.negado = true; throw e; };
+    const pode = p => { if (!conta.perms[p]) negar(); };
+    const algum = ps => { if (!ps.some(p => conta.perms[p])) negar(); };
     if (req.acao === 'entrar' || req.acao === 'dados') gerarPreventivasSePreciso();
-    if (req.acao === 'entrar') { if (req.registro) registrarAcesso(conta, conta.usuario, req.registro); return json(base); }
+    if (req.acao === 'entrar') {
+      if (req.registro) registrarAcesso(conta, conta.usuario, req.registro);
+      return json(Object.assign(base, token ? { token, sessaoHoras: Math.round(SEG.sessaoInativa / 36e5) } : {}));
+    }
+    if (req.acao === 'sair') { encerrarSessao(req.token); auditar(conta, 'Saiu do sistema', ''); return json({ ok: true }); }
     if (req.acao === 'acessos') { pode('acessos'); return json(Object.assign(base, { acessos: lerAcessos(req.dias) })); }
+    if (req.acao === 'auditoria') { pode('acessos'); return json(Object.assign(base, { auditoria: lerAuditoria(req.dias) })); }
     if (req.acao === 'dados') return json(Object.assign(base, { dados: dados(req.meses, conta) }));
     if (req.acao === 'relatorio') { pode('dashboard'); return json(Object.assign(base, { relatorio: relatorio(req.de, req.ate, conta) })); }
     if (req.acao === 'usuarios') { pode('usuarios'); return json(Object.assign(base, { equipe: equipe() })); }
     if (req.acao === 'pendencias') { pode('pendencias'); return json(Object.assign(base, { pendencias: pendLista() })); }
-    if (req.acao === 'nfVer') { algum(['historico_ver', 'registrar_entrada', 'dashboard']); return json(Object.assign(base, { foto: verArquivo(req.fotoId, pastaNF()) })); }
+    if (req.acao === 'nfVer') { algum(['historico_ver', 'registrar_entrada', 'dashboard']); const f = verArquivo(req.fotoId, pastaNF()); auditar(conta, 'Abriu nota fiscal', f.nome); delete f.nome; return json(Object.assign(base, { foto: f })); }
     if (req.acao === 'nfEnviar') { pode('registrar_entrada'); return json(Object.assign(base, { arquivo: nfEnviar(req, conta) })); }
-    if (req.acao === 'osFotoVer') { algum(['os_ver', 'os_abrir', 'os_atender', 'os_gerenciar']); return json(Object.assign(base, { foto: verFoto(req.fotoId) })); }
+    if (req.acao === 'osFotoVer') { algum(['os_ver', 'os_abrir', 'os_atender', 'os_gerenciar']); const f = verFoto(req.fotoId); delete f.nome; return json(Object.assign(base, { foto: f })); }
 
     const lock = LockService.getScriptLock();
     if (!lock.tryLock(20000)) throw falha('O sistema está ocupado com outro registro. Tente de novo em alguns segundos.');
@@ -238,13 +273,15 @@ function doPost(e) {
         case 'excluirItem': pode('itens_editar'); msg = excluirItem(req.id, conta); break;
         case 'estornar': pode('historico_estornar'); msg = estornar(req, nome, conta); break;
         case 'salvarUsuario': pode('usuarios'); msg = salvarUsuario(req, conta); extra.equipe = equipe(); break;
-        case 'salvarPerfil': pode('usuarios'); msg = salvarPerfil(req); extra.equipe = equipe(); break;
+        case 'acessoUsuario': pode('usuarios'); msg = acessoUsuario(req, conta); extra.equipe = equipe(); break;
+        case 'salvarPerfil': pode('usuarios'); exigirPerfilTotalParaPerfil(req, conta); msg = salvarPerfil(req); extra.equipe = equipe(); break;
         case 'excluirPerfil': pode('usuarios'); msg = excluirPerfil(req.nome); extra.equipe = equipe(); break;
         case 'pendSalvar': pode('pendencias'); msg = pendSalvar(req.pend || {}, conta); extra.pendencias = true; break;
         case 'pendExcluir': pode('pendencias'); msg = pendExcluir(req.id); extra.pendencias = true; break;
         default: throw falha('Ação desconhecida.');
       }
       SpreadsheetApp.flush();
+      auditar(conta, ACOES_AUDIT[req.acao] || req.acao, resumoAuditoria(req, msg));
     } finally {
       lock.releaseLock();
     }
@@ -252,6 +289,8 @@ function doPost(e) {
     if (extra.equipe) return json(Object.assign(base, { msg }, extra));
     return json(Object.assign(base, { msg, dados: dados(req.meses, conta) }, extra));
   } catch (err) {
+    // tentativas sem permissão ficam no histórico de auditoria
+    if (conta && (err.negado || /não tem permissão/i.test(String(err.message)))) auditar(conta, ACOES_AUDIT[req.acao] || String(req.acao || ''), String(err.message), 'Negado');
     return json({ ok: false, erro: err.paraUsuario ? err.message : 'Erro no servidor: ' + err.message });
   }
 }
@@ -436,6 +475,12 @@ function estornar(r, nome, conta) {
 function dados(meses, conta) {
   const ms = (Array.isArray(meses) ? meses : []).filter(x => /^\d{4}-\d{2}$/.test(String(x)));
   const limpa = o => { const c = Object.assign({}, o); delete c._row; return c; };
+  const p0 = (conta && conta.perms) || {};
+  // perfil sem nenhuma permissão do estoque (ex.: Síndico) não recebe itens nem movimentações
+  if (!PERMS_ESTOQUE.some(k => p0[k])) {
+    const vazio = { itens: [], emprestimos: [], movs: [], setores: [], locais: {} };
+    return Object.assign(vazio, dadosOsDem(ms, conta, [], limpa));
+  }
   const todas = linhas(tabela('movs'));
   const V = visaoSetores(conta);
   const out = {
@@ -445,6 +490,10 @@ function dados(meses, conta) {
     setores: V.setores,
     locais: V.setores.reduce((m, st) => { m[st] = lerLocais(st); return m; }, {})
   };
+  return Object.assign(out, dadosOsDem(ms, conta, todas, limpa));
+}
+function dadosOsDem(ms, conta, todas, limpa) {
+  const out = {};
   const p = (conta && conta.perms) || {};
   if (p.os_ver || p.os_abrir || p.os_atender || p.os_gerenciar) {
     // OS em aberto, mais as encerradas nos últimos 90 dias e as abertas nos meses consultados
@@ -614,8 +663,14 @@ function autenticar(usuario, senha) {
   const u = String(usuario || '').trim().toLowerCase();
   const s = String(senha || '').trim();
   if (!u || !s) return null;
-  const us = lerUsuarios().lista.find(x => x.usuario === u);
-  if (!us || !us.ativo || us.senha !== s) return null;
+  const U = lerUsuarios();
+  const us = U.lista.find(x => x.usuario === u);
+  if (!us || !us.ativo || !conferirSenha(s, us.senha)) return null;
+  // senha ainda em texto (digitada direto na planilha): vira código na primeira entrada
+  if (!ehHash(us.senha)) U.sh.getRange(us.row, U.c['Senha'] + 1).setNumberFormat('@').setValue(hashSenha(s));
+  return contaDe(us);
+}
+function contaDe(us) {
   const perms = lerPerfis()[us.perfil] || {};
   return { usuario: us.usuario, nome: us.nome || us.usuario, perfil: us.perfil, perms };
 }
@@ -666,7 +721,11 @@ function lerPerfis() {
 function equipe() {
   const perfis = lerPerfis();
   return {
-    usuarios: lerUsuarios().lista.map(u => ({ usuario: u.usuario, nome: u.nome, senha: u.senha, perfil: u.perfil, ativo: u.ativo, telefone: u.telefone })),
+    usuarios: (function () {
+      const ses = contarSessoes();
+      return lerUsuarios().lista.map(u => ({ usuario: u.usuario, nome: u.nome, perfil: u.perfil, ativo: u.ativo, telefone: u.telefone,
+        sessoes: ses[u.usuario] || 0, bloqueado: !!loginBloqueado(u.usuario) }));
+    })(),
     perfis: Object.keys(perfis).map(n => ({ nome: n, perms: perfis[n], fixo: n === PERFIL_TOTAL })),
     permissoes: PERMISSOES.map(([chave, coluna, descricao, grupo]) => ({ chave, descricao, grupo }))
   };
@@ -680,7 +739,8 @@ function salvarUsuario(r, conta) {
   const nome = texto(v.nome, 60);
   if (!nome) throw falha('Informe o nome do colaborador.');
   const senha = String(v.senha || '').trim();
-  if (senha.length < 4) throw falha('A senha precisa ter pelo menos 4 caracteres.');
+  if (!original && !senha) throw falha('Defina a senha do novo login.');
+  if (senha && senha.length < SEG.senhaMin) throw falha('A senha precisa ter pelo menos ' + SEG.senhaMin + ' caracteres.');
   const perfis = lerPerfis();
   const perfil = String(v.perfil || '').trim();
   if (!perfis[perfil]) throw falha('Perfil não encontrado.');
@@ -694,12 +754,18 @@ function salvarUsuario(r, conta) {
   }
   const outro = U.lista.find(x => x.usuario === usuario && x.usuario !== original);
   if (outro) throw falha('O usuário "' + usuario + '" já existe.');
+  const anterior = original ? U.lista.find(x => x.usuario === original) : null;
+  // só quem é do perfil Administração cria ou altera logins com acesso total
+  if ((perfil === PERFIL_TOTAL || (anterior && anterior.perfil === PERFIL_TOTAL)) && conta.usuario && conta.perfil !== PERFIL_TOTAL) {
+    const e = falha('Só um login do perfil Administração pode criar ou alterar logins com acesso total.'); e.negado = true; throw e;
+  }
   if (original && original === conta.usuario) {
     if (!ativo) throw falha('Você não pode desativar o seu próprio login.');
     if (!perfis[perfil].usuarios) throw falha('Você não pode tirar de si mesmo o acesso a usuários e permissões.');
   }
   const linha = [];
-  linha[U.c['Usuário']] = usuario; linha[U.c['Nome']] = nome; linha[U.c['Senha']] = senha;
+  linha[U.c['Usuário']] = usuario; linha[U.c['Nome']] = nome;
+  if (senha) linha[U.c['Senha']] = hashSenha(senha);
   linha[U.c['Perfil']] = perfil; linha[U.c['Ativo']] = ativo ? 'Sim' : 'Não'; linha[U.c['Telefone']] = telefone;
   let row;
   if (original) {
@@ -734,7 +800,42 @@ function salvarUsuario(r, conta) {
       });
     });
   }
-  return original ? 'Usuário atualizado: ' + nome + '.' : 'Usuário criado: ' + nome + '.';
+  // sessões: renomeado leva junto; senha trocada ou login bloqueado encerra os acessos abertos
+  if (original && original !== usuario) renomearSessoes(original, usuario);
+  let encerradas = 0;
+  if (original && (senha || !ativo)) encerradas = encerrarSessoesDe(usuario, original === conta.usuario ? conta.sessao : '');
+  if (original && senha) limparFalhasLogin(usuario);
+  const mud = [];
+  if (!original) mud.push('perfil ' + perfil + (ativo ? '' : ', bloqueado'));
+  else {
+    if (anterior && anterior.nome !== nome) mud.push('nome');
+    if (original !== usuario) mud.push('usuário ' + original + ' → ' + usuario);
+    if (anterior && anterior.perfil !== perfil) mud.push('perfil ' + anterior.perfil + ' → ' + perfil);
+    if (anterior && anterior.ativo !== ativo) mud.push(ativo ? 'reativado' : 'bloqueado');
+    if (senha) mud.push('senha trocada');
+    if (anterior && anterior.telefone !== telefone) mud.push('WhatsApp');
+  }
+  AUDIT_DET = (original ? 'Alterou ' : 'Criou ') + usuario + (mud.length ? ': ' + mud.join(', ') : ' (sem mudanças)') + (encerradas ? '; ' + encerradas + ' acesso(s) aberto(s) encerrado(s)' : '');
+  return original ? 'Usuário atualizado: ' + nome + '.' + (encerradas ? ' Os acessos abertos dele foram encerrados.' : '') : 'Usuário criado: ' + nome + '.';
+}
+
+// encerrar acessos abertos ou liberar um login bloqueado por tentativas
+function acessoUsuario(r, conta) {
+  const u = String(r.usuario || '').trim().toLowerCase();
+  const us = lerUsuarios().lista.find(x => x.usuario === u);
+  if (!us) throw falha('Usuário não encontrado. Atualize a página.');
+  if (us.perfil === PERFIL_TOTAL && conta.perfil !== PERFIL_TOTAL) { const e = falha('Só um login do perfil Administração pode mexer nos acessos de outro administrador.'); e.negado = true; throw e; }
+  if (r.op === 'liberar') { limparFalhasLogin(u); AUDIT_DET = 'Liberou o login ' + u; return 'Login de ' + us.nome + ' liberado.'; }
+  if (r.op === 'encerrar') {
+    const n = encerrarSessoesDe(u, u === conta.usuario ? conta.sessao : '');
+    AUDIT_DET = 'Encerrou ' + n + ' acesso(s) aberto(s) de ' + u;
+    return n ? n + (n === 1 ? ' acesso encerrado.' : ' acessos encerrados.') + ' ' + us.nome + ' vai precisar entrar de novo.' : 'Não havia acessos abertos de ' + us.nome + '.';
+  }
+  throw falha('Operação inválida.');
+}
+function exigirPerfilTotalParaPerfil(r, conta) {
+  const sensivel = r.perms && (r.perms.usuarios || r.perms.acessos);
+  if (sensivel && conta.perfil !== PERFIL_TOTAL) { const e = falha('Só um login do perfil Administração pode dar a um perfil acesso a usuários ou ao histórico de acessos.'); e.negado = true; throw e; }
 }
 
 function salvarPerfil(r) {
@@ -917,7 +1018,7 @@ function abaUsuarios() {
 }
 
 function senhaAleatoria() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(Math.floor(10000000 + Math.random() * 90000000));
 }
 
 // ---------- relatório para o dashboard ----------
@@ -1176,8 +1277,8 @@ function fotoDaPasta(id, pastaObj) {
 
 function verFoto(id) { return verArquivo(id, pastaFotos()); }
 function verArquivo(id, pasta) {
-  const b = fotoDaPasta(id, pasta).getBlob();
-  return { mime: b.getContentType(), b64: Utilities.base64Encode(b.getBytes()) };
+  const f = fotoDaPasta(id, pasta), b = f.getBlob();
+  return { mime: b.getContentType(), b64: Utilities.base64Encode(b.getBytes()), nome: f.getName() };
 }
 
 function osFotoRemover(r, conta) {
@@ -1664,8 +1765,13 @@ function autorizar() {
   tabela('acessos');
   abaPerfis();
   tabela('itens');
+  tabela('audit');
   const limpeza = garantirLimpeza() + garantirSindico();
+  const senhas = migrarSenhas();
+  protegerAbas();
+  const arquivos = verificarArquivos();
   Logger.log('Pronto: pastas de fotos e de notas fiscais, abas OS, Demandas, Preventivas e Pendencias, setores e permissões verificadas.' + limpeza);
+  Logger.log('Segurança: ' + senhas + ' ' + arquivos);
 }
 
 // ---------- controle de pendências (menu Administração) ----------
@@ -1993,15 +2099,244 @@ function pendExcluir(id) {
   return filhos.length ? 'Pendência e ' + filhos.length + ' subite' + (filhos.length === 1 ? 'm' : 'ns') + ' excluídos.' : 'Pendência excluída.';
 }
 
+// ---------- segurança: senhas, sessões, tentativas de login e auditoria ----------
+
+const SEG = {
+  iteracoes: 3000,              // rodadas do hash da senha (deixa adivinhar senhas muito mais lento)
+  senhaMin: 6,                  // tamanho mínimo das senhas novas
+  sessaoInativa: 24 * 36e5,     // a sessão termina depois de 24 h sem uso…
+  sessaoMax: 7 * 24 * 36e5,     // …e, de qualquer forma, 7 dias depois da entrada
+  tentativas: 5,                // senhas erradas seguidas até bloquear o login…
+  bloqueioMin: 15               // …por 15 minutos
+};
+const PERMS_ESTOQUE = ['painel', 'itens_ver', 'historico_ver', 'dashboard', 'registrar_saida', 'registrar_entrada', 'registrar_troca',
+  'registrar_emprestimo', 'devolver', 'itens_cadastrar', 'itens_editar', 'historico_estornar', 'exportar'];
+var AUDIT_DET = '';
+
+// Segredo guardado nas propriedades do script (fora da planilha): sem ele, quem copiar a aba Usuarios não consegue testar senhas.
+function segredoSenhas() {
+  const props = PropertiesService.getScriptProperties();
+  let s = props.getProperty('SEG_SEGREDO');
+  if (!s) { s = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, ''); props.setProperty('SEG_SEGREDO', s); }
+  return s;
+}
+function ehHash(v) { return /^h1\$\d+\$[0-9a-f]{32}\$[A-Za-z0-9+/=]{40,}$/.test(String(v || '')); }
+function calcularHash(senha, sal, n) {
+  const chave = Utilities.newBlob(segredoSenhas() + ':' + sal).getBytes();
+  let h = Utilities.computeHmacSha256Signature(Utilities.newBlob(sal + ':' + senha).getBytes(), chave);
+  for (let i = 1; i < n; i++) h = Utilities.computeHmacSha256Signature(h, chave);
+  return Utilities.base64Encode(h);
+}
+function hashSenha(senha) {
+  const sal = Utilities.getUuid().replace(/-/g, '');
+  return 'h1$' + SEG.iteracoes + '$' + sal + '$' + calcularHash(String(senha), sal, SEG.iteracoes);
+}
+function iguais(a, b) {
+  a = String(a); b = String(b);
+  let d = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return d === 0;
+}
+function conferirSenha(senha, guardada) {
+  guardada = String(guardada || '').trim();
+  if (!guardada) return false;
+  if (!ehHash(guardada)) return iguais(senha, guardada); // texto puro (antigo ou digitado na planilha)
+  const p = guardada.split('$');
+  return iguais(calcularHash(senha, p[2], Number(p[1]) || SEG.iteracoes), p[3]);
+}
+// troca todas as senhas em texto da aba Usuarios pelo código (hash)
+function migrarSenhas() {
+  const U = lerUsuarios();
+  let n = 0;
+  U.lista.forEach(u => {
+    if (u.senha && !ehHash(u.senha)) { U.sh.getRange(u.row, U.c['Senha'] + 1).setNumberFormat('@').setValue(hashSenha(u.senha)); n++; }
+  });
+  if (n) auditar({ usuario: 'sistema', nome: 'Sistema', perfil: '' }, 'Senhas protegidas', n + ' senha(s) da aba Usuarios trocada(s) por código');
+  return n ? n + ' senha(s) da aba Usuarios agora guardada(s) como código.' : 'Todas as senhas já estavam guardadas como código.';
+}
+
+// --- sessões: o aparelho guarda só um código de sessão, nunca a senha ---
+function chaveSessao(token) {
+  const d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(token));
+  return 'SESS_' + d.map(b => ('0' + (b & 255).toString(16)).slice(-2)).join('').slice(0, 40);
+}
+function abrirSessao(conta, reg) {
+  const token = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+  const agoraMs = Date.now();
+  limparSessoesVencidas();
+  PropertiesService.getScriptProperties().setProperty(chaveSessao(token), JSON.stringify({
+    u: conta.usuario, c: agoraMs, v: agoraMs, a: texto((reg || {}).aparelho, 60)
+  }));
+  return token;
+}
+function lerSessao(token) {
+  if (!/^[0-9a-f]{64}$/.test(String(token || ''))) return null;
+  const k = chaveSessao(token);
+  const props = PropertiesService.getScriptProperties();
+  let s;
+  try { s = JSON.parse(props.getProperty(k) || 'null'); } catch (e) { s = null; }
+  if (!s) return null;
+  const t = Date.now();
+  if (t - s.v > SEG.sessaoInativa || t - s.c > SEG.sessaoMax) { props.deleteProperty(k); return null; }
+  return { k, s, props };
+}
+function contaDaSessao(token) {
+  const x = lerSessao(token);
+  if (!x) return null;
+  const us = lerUsuarios().lista.find(u => u.usuario === x.s.u);
+  if (!us || !us.ativo) { x.props.deleteProperty(x.k); return null; }
+  if (Date.now() - x.s.v > 5 * 60e3) { x.s.v = Date.now(); x.props.setProperty(x.k, JSON.stringify(x.s)); }
+  const conta = contaDe(us);
+  conta.sessao = x.k;
+  return conta;
+}
+function encerrarSessao(token) {
+  if (!/^[0-9a-f]{64}$/.test(String(token || ''))) return;
+  PropertiesService.getScriptProperties().deleteProperty(chaveSessao(token));
+}
+function todasSessoes() {
+  const all = PropertiesService.getScriptProperties().getProperties();
+  return Object.keys(all).filter(k => k.indexOf('SESS_') === 0).map(k => { try { return { k, s: JSON.parse(all[k]) }; } catch (e) { return { k, s: null }; } });
+}
+function limparSessoesVencidas() {
+  const props = PropertiesService.getScriptProperties(), t = Date.now();
+  todasSessoes().forEach(x => { if (!x.s || t - x.s.v > SEG.sessaoInativa || t - x.s.c > SEG.sessaoMax) props.deleteProperty(x.k); });
+}
+function encerrarSessoesDe(usuario, exceto) {
+  const props = PropertiesService.getScriptProperties();
+  let n = 0;
+  todasSessoes().forEach(x => { if (x.s && x.s.u === usuario && x.k !== exceto) { props.deleteProperty(x.k); n++; } });
+  return n;
+}
+function renomearSessoes(de, para) {
+  const props = PropertiesService.getScriptProperties();
+  todasSessoes().forEach(x => { if (x.s && x.s.u === de) { x.s.u = para; props.setProperty(x.k, JSON.stringify(x.s)); } });
+}
+function contarSessoes() {
+  const t = Date.now(), out = {};
+  todasSessoes().forEach(x => { if (x.s && t - x.s.v <= SEG.sessaoInativa && t - x.s.c <= SEG.sessaoMax) out[x.s.u] = (out[x.s.u] || 0) + 1; });
+  return out;
+}
+
+// --- tentativas de login: 5 senhas erradas seguidas bloqueiam o login por 15 minutos ---
+function chaveLogin(u) { return 'LOGIN_' + String(u || '').slice(0, 40); }
+function loginBloqueado(usuario) {
+  if (!usuario) return 0;
+  let x;
+  try { x = JSON.parse(PropertiesService.getScriptProperties().getProperty(chaveLogin(usuario)) || 'null'); } catch (e) { x = null; }
+  if (!x || !x.ate) return 0;
+  const falta = x.ate - Date.now();
+  return falta > 0 ? Math.ceil(falta / 60e3) : 0;
+}
+function registrarFalhaLogin(usuario) {
+  Utilities.sleep(700); // cada senha errada custa tempo para quem tenta adivinhar
+  // só conta tentativas de logins que existem (nome inventado não ocupa espaço nas propriedades)
+  if (!usuario || !lerUsuarios().lista.some(u => u.usuario === usuario)) return false;
+  const props = PropertiesService.getScriptProperties(), k = chaveLogin(usuario), t = Date.now();
+  let x;
+  try { x = JSON.parse(props.getProperty(k) || 'null'); } catch (e) { x = null; }
+  if (!x || t - (x.ult || 0) > SEG.bloqueioMin * 60e3) x = { n: 0 };
+  x.n = (x.n || 0) + 1; x.ult = t;
+  const travou = x.n >= SEG.tentativas;
+  if (travou) { x.ate = t + SEG.bloqueioMin * 60e3; x.n = 0; }
+  props.setProperty(k, JSON.stringify(x));
+  return travou;
+}
+function limparFalhasLogin(usuario) { if (usuario) PropertiesService.getScriptProperties().deleteProperty(chaveLogin(usuario)); }
+
+// --- histórico de auditoria (aba Auditoria) ---
+const ACOES_AUDIT = {
+  registrar: 'Movimentação', osAbrir: 'Abriu OS', osAtualizar: 'Atualizou OS', osFoto: 'Foto na OS', osFotoRemover: 'Tirou foto da OS',
+  demCriar: 'Criou demanda', demAtualizar: 'Atualizou demanda', salvarPreventiva: 'Salvou preventiva', excluirPreventiva: 'Excluiu preventiva',
+  salvarLocais: 'Alterou locais', importarContagem: 'Importou inventário', devolver: 'Devolução', salvarItem: 'Salvou item',
+  excluirItem: 'Excluiu item', estornar: 'Estornou lançamento', salvarUsuario: 'Usuário', acessoUsuario: 'Acessos de usuário',
+  salvarPerfil: 'Perfil', excluirPerfil: 'Excluiu perfil', pendSalvar: 'Pendência', pendExcluir: 'Excluiu pendência',
+  nfEnviar: 'Enviou nota fiscal', nfVer: 'Abriu nota fiscal', relatorio: 'Dashboard', usuarios: 'Usuários', acessos: 'Histórico de acessos',
+  auditoria: 'Auditoria', pendencias: 'Pendências'
+};
+function resumoAuditoria(req, msg) {
+  if (AUDIT_DET) return AUDIT_DET;
+  const m = typeof msg === 'string' ? msg : (msg && msg.texto) || '';
+  const extra = [];
+  if (req.acao === 'salvarPerfil') extra.push('perfil ' + texto(req.nome, 40));
+  if (req.acao === 'excluirPerfil') extra.push('perfil ' + texto(req.nome, 40));
+  if (req.acao === 'excluirItem' || req.acao === 'pendExcluir') extra.push('id ' + texto(req.id, 40));
+  if (req.acao === 'estornar' && req.motivo) extra.push('motivo: ' + texto(req.motivo, 120));
+  return [m].concat(extra).filter(Boolean).join(' · ').slice(0, 500);
+}
+function auditar(conta, acao, detalhe, resultado) {
+  try {
+    gravar(tabela('audit'), {
+      id: novoId('au'), quando: agora(), usuario: conta && conta.usuario || '', nome: conta && conta.nome || '',
+      perfil: conta && conta.perfil || '', acao: texto(acao, 60), detalhe: texto(detalhe, 500), resultado: resultado || 'OK'
+    });
+  } catch (e) { /* a auditoria nunca pode impedir a operação */ }
+}
+function lerAuditoria(dias) {
+  const t = tabela('audit');
+  const ultima = t.sh.getLastRow();
+  if (ultima < 2) return [];
+  const n = Math.min(ultima - 1, 5000);
+  const vals = t.sh.getRange(ultima - n + 1, 1, n, t.ncol).getValues();
+  const corte = Number(dias) > 0 ? Utilities.formatDate(new Date(Date.now() - Number(dias) * 864e5), Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
+  const out = [];
+  for (let i = vals.length - 1; i >= 0; i--) {
+    const r = vals[i];
+    if (!r[t.idx.id]) continue;
+    const quando = r[t.idx.quando] instanceof Date ? Utilities.formatDate(r[t.idx.quando], Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') : String(r[t.idx.quando]);
+    if (corte && quando.slice(0, 10) < corte) continue;
+    out.push({ quando, usuario: String(r[t.idx.usuario]), nome: String(r[t.idx.nome]), perfil: String(r[t.idx.perfil]),
+      acao: String(r[t.idx.acao]), detalhe: String(r[t.idx.detalhe]), resultado: String(r[t.idx.resultado] || 'OK') });
+  }
+  return out;
+}
+// abas que só o sistema escreve: ninguém além do dono da planilha consegue editar à mão
+function protegerAbas() {
+  ['audit', 'acessos'].forEach(k => {
+    try {
+      const sh = tabela(k).sh;
+      const ja = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+      const p = ja.length ? ja[0] : sh.protect().setDescription('Gravada pelo Pier Gestão: não editar');
+      const outros = p.getEditors().filter(u => u.getEmail() !== Session.getEffectiveUser().getEmail());
+      if (outros.length) p.removeEditors(outros);
+      if (p.canDomainEdit()) p.setDomainEdit(false);
+    } catch (e) { Logger.log('Não foi possível proteger a aba ' + k + ': ' + e.message); }
+  });
+}
+// confere quem tem acesso à planilha, às pastas e aos arquivos; tira qualquer link aberto
+function verificarArquivos() {
+  const avisos = [];
+  let fechados = 0;
+  const fechar = (item, rotulo) => {
+    try {
+      if (item.getSharingAccess() !== DriveApp.Access.PRIVATE) { item.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE); fechados++; }
+      const pessoas = item.getEditors().concat(item.getViewers()).map(u => u.getEmail()).filter(Boolean);
+      if (pessoas.length) avisos.push(rotulo + ' compartilhada com: ' + pessoas.join(', '));
+    } catch (e) { avisos.push(rotulo + ': não foi possível conferir (' + e.message + ')'); }
+  };
+  fechar(DriveApp.getFileById(SpreadsheetApp.getActive().getId()), 'Planilha');
+  [[pastaFotos(), 'Pasta de fotos das OS'], [pastaNF(), 'Pasta de notas fiscais']].forEach(([pasta, rot]) => {
+    fechar(pasta, rot);
+    const it = pasta.getFiles();
+    while (it.hasNext()) {
+      const f = it.next();
+      try { if (f.getSharingAccess() !== DriveApp.Access.PRIVATE) { f.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE); fechados++; } } catch (e) {}
+    }
+  });
+  const txt = (fechados ? fechados + ' link(s) aberto(s) fechado(s). ' : 'Nenhum arquivo com link aberto. ') + (avisos.length ? avisos.join('; ') + '.' : 'Planilha e pastas acessíveis só pelo dono.');
+  auditar({ usuario: 'sistema', nome: 'Sistema', perfil: '' }, 'Verificação dos arquivos', txt);
+  return txt;
+}
+
 // ---------- histórico de acessos ----------
 
-const ACESSO_TIPOS = { login: 'Entrou com senha', retorno: 'Voltou ao sistema', falha: 'Senha errada' };
+const ACESSO_TIPOS = { login: 'Entrou com senha', retorno: 'Voltou ao sistema', falha: 'Senha errada', bloqueado: 'Login bloqueado' };
 
 // Grava uma linha na aba Acessos. Nunca impede a entrada: se der erro, só não registra.
 function registrarAcesso(conta, usuarioDigitado, reg) {
   try {
     const t = tabela('acessos');
-    const motivo = conta ? (reg.motivo === 'login' ? 'login' : 'retorno') : 'falha';
+    const motivo = conta ? (reg.motivo === 'login' ? 'login' : 'retorno') : (reg.motivo === 'bloqueado' ? 'bloqueado' : 'falha');
     gravar(t, {
       id: novoId('ac'), quando: agora(), usuario: texto(usuarioDigitado, 40).toLowerCase(),
       nome: conta ? conta.nome : '', perfil: conta ? conta.perfil : '',

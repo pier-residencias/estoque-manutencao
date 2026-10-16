@@ -576,3 +576,14 @@ tr.ac-falha td{background:color-mix(in srgb,var(--crit-bg) 60%,var(--surface))}
   .setor-menu{right:auto;left:0}
   .me .sync{text-align:left}
 }
+
+/* Histórico de acessos: entradas no sistema × alterações (auditoria) */
+.ac-modo{display:inline-flex;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:14px;background:var(--surface);max-width:100%}
+.ac-modo button{border:0;background:transparent;padding:8px 14px;font:inherit;font-weight:700;font-size:.88rem;color:var(--muted);cursor:pointer}
+.ac-modo button+button{border-left:1px solid var(--line)}
+.ac-modo button[aria-pressed="true"]{background:var(--fg);color:var(--surface)}
+.ac-modo button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+div.ac-pessoa{cursor:default}
+.ac-det{font-size:.86rem;color:var(--fg);min-width:0;word-break:break-word}
+.u-acesso .actions{align-items:center;gap:8px;flex-wrap:wrap}
+#f-u .field{align-content:start}
