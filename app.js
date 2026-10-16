@@ -2565,6 +2565,21 @@ try { const f = JSON.parse(localStorage.getItem("pd-filtros")||"{}"); ["q","st",
 const pdGuardarFiltros = () => { try { localStorage.setItem("pd-filtros", JSON.stringify({q:PD.q, st:PD.st, crit:PD.crit, resp:PD.resp, hide:PD.hide})); } catch(e){} };
 const pdSecaoDe = p => PD_SECOES.some(s => s.nome === p.secao) ? p.secao : PD_OUTRAS;
 const pdAtrasada = p => p.prazo && p.status !== "Concluído" && p.prazo < hoje();
+// prazo de pendência pontual fica bloqueado depois de definido (a tarefa constante usa o prazo como próxima execução)
+const pdPrazoFixo = p => !!(p && p.prazo && !pdConst(p));
+const pdTemConcl = () => !S.pend || !S.pend.length || ("concluidoEm" in S.pend[0]);
+const PD_CADEADO = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" fill-opacity=".15"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>';
+const pdDias = (a, b) => Math.round((new Date(b + "T12:00:00") - new Date(a + "T12:00:00")) / 864e5);
+function pdConfirmarPrazo(id, valor){
+  const r = PD.rows.get(id); if (!r) return;
+  const velho = r.el.querySelector(".pd-conf[data-prazo]"); if (velho) velho.remove();
+  const box = pdEl("div", {class:"pd-conf", "data-prazo":"1"}, [pdEl("span", {}, ["Definir o prazo para ", pdEl("b", {text:fData(valor)}), "? Depois de salvo, o prazo fica bloqueado."])]);
+  const sim = pdEl("button", {class:"btn small primary", type:"button", text:"Bloquear prazo"});
+  const nao = pdEl("button", {class:"btn small", type:"button", text:"Cancelar"});
+  sim.onclick = () => { box.remove(); pdSalvar(id, {prazo:valor}); };
+  nao.onclick = () => { box.remove(); r.f.prazo.value = ""; };
+  box.append(sim, nao); r.el.append(box);
+}
 const pdLista = () => (S.pend || []).slice().sort((a,b) => (Number(a.ordem)||9e9) - (Number(b.ordem)||9e9));
 const pdAchar = id => (S.pend || []).find(p => p.id === id);
 const pdEl = (tag, attrs={}, kids=[]) => { const n = document.createElement(tag); for (const [k,v] of Object.entries(attrs)) { if (k==="class") n.className = v; else if (k==="text") n.textContent = v; else n.setAttribute(k, v); } for (const x of [].concat(kids)) if (x != null) n.append(x); return n; };
@@ -2664,6 +2679,9 @@ function pdLinha(id){
   f.st.innerHTML = PD_STATUS.map(s => `<option>${esc(s)}</option>`).join("");
   f.resp = pdEl("input", {class:"input", list:"pd-resps", placeholder:"Responsável", "aria-label":"Responsável", id:"pdr-"+id});
   f.prazo = pdEl("input", {class:"input pd-prazo", type:"date", "aria-label":"Prazo", id:"pdp-"+id});
+  f.prazoFixo = pdEl("div", {class:"pd-prazo-fixo", hidden:""});
+  f.concl = pdEl("input", {class:"input pd-concl", type:"date", "aria-label":"Concluída em", id:"pdk-"+id});
+  f.lblConcl = pdEl("div", {class:"pd-lbl", text:"Concluída em"});
   f.crit = pdEl("select", {class:"input pd-crit", "aria-label":"Criticidade", id:"pdc-"+id});
   f.crit.innerHTML = `<option value="">Criticidade</option>` + ["Baixa","Média","Alta"].map(s => `<option>${esc(s)}</option>`).join("");
   f.crit.addEventListener("change", () => { f.crit.dataset.c = f.crit.value; pdSalvar(id, {criticidade:f.crit.value}); });
@@ -2673,16 +2691,34 @@ function pdLinha(id){
   f.lblPrazo = pdEl("div", {class:"pd-lbl", text:"Prazo"});
   f.tit.addEventListener("input", () => { pdAuto(f.tit); if (f.tit.value.trim()) pdSalvarDepois(id, "titulo", f.tit.value.trim()); });
   f.obs.addEventListener("input", () => { pdAuto(f.obs); pdSalvarDepois(id, "obs", f.obs.value); });
-  f.st.addEventListener("change", () => { f.st.dataset.s = f.st.value; pdSalvar(id, {status:f.st.value}); });
+  f.st.addEventListener("change", () => {
+    f.st.dataset.s = f.st.value;
+    const p = pdAchar(id);
+    // espelha na tela o que o servidor faz com a data de conclusão
+    if (p && pdTemConcl()) { if (f.st.value === "Concluído" && p.status !== "Concluído" && !p.concluidoEm) p.concluidoEm = hoje(); if (f.st.value !== "Concluído") p.concluidoEm = ""; }
+    pdSalvar(id, {status:f.st.value});
+  });
   f.resp.addEventListener("input", () => pdSalvarDepois(id, "responsavel", f.resp.value.trim()));
-  f.prazo.addEventListener("change", () => pdSalvar(id, {prazo:f.prazo.value}));
+  f.prazo.addEventListener("change", () => {
+    const p = pdAchar(id) || {};
+    if (pdConst(p)) { pdSalvar(id, {prazo:f.prazo.value}); return; }
+    if (f.prazo.value) pdConfirmarPrazo(id, f.prazo.value);
+  });
+  f.concl.addEventListener("change", () => {
+    const v = f.concl.value, p = pdAchar(id) || {};
+    if (v && v > hoje()) { toast("A data de conclusão não pode ser depois de hoje.", true); f.concl.value = p.concluidoEm || ""; return; }
+    const patch = {concluidoEm: v};
+    if (v && p.status !== "Concluído") patch.status = "Concluído";
+    pdSalvar(id, patch);
+  });
   f.del.addEventListener("click", () => pdConfirmar(id));
   const el = pdEl("div", {class:"pd-row"}, [
     f.num, pdEl("div", {class:"pd-main"}, [f.tit, f.obs, f.meta]),
     pdEl("div", {class:"c-st"}, [f.lblSt, f.st, f.cst]),
     pdEl("div", {class:"c-crit"}, [pdEl("div", {class:"pd-lbl", text:"Criticidade"}), f.crit]),
     pdEl("div", {class:"c-resp"}, [pdEl("div", {class:"pd-lbl", text:"Responsável"}), f.resp]),
-    pdEl("div", {class:"c-prazo"}, [f.lblPrazo, f.prazo]),
+    pdEl("div", {class:"c-prazo"}, [f.lblPrazo, f.prazo, f.prazoFixo]),
+    pdEl("div", {class:"c-concl"}, [f.lblConcl, f.concl]),
     pdEl("div", {class:"c-del"}, [f.del])
   ]);
   const r = {el, f}; PD.rows.set(id, r); return r;
@@ -2691,7 +2727,21 @@ const pdPor = (inp, v) => { if (document.activeElement !== inp && inp.value !== 
 function pdAtualizar(p){
   const r = PD.rows.get(p.id) || pdLinha(p.id), f = r.f;
   f.num.textContent = p.numero || "—";
-  pdPor(f.tit, p.titulo||""); pdPor(f.obs, p.obs||""); pdPor(f.resp, p.responsavel||""); pdPor(f.prazo, p.prazo||"");
+  pdPor(f.tit, p.titulo||""); pdPor(f.obs, p.obs||""); pdPor(f.resp, p.responsavel||"");
+  if (pdPrazoFixo(p)) {
+    f.prazo.hidden = true; f.prazoFixo.hidden = false;
+    const ass = p.prazo + "|" + (p.prazoDefinidoEm||"") + "|" + (p.prazoDefinidoPor||"");
+    if (f.prazoFixo.dataset.a !== ass) {
+      f.prazoFixo.dataset.a = ass;
+      f.prazoFixo.innerHTML = PD_CADEADO + `<span>${esc(fData(p.prazo))}</span>`;
+      f.prazoFixo.title = "Prazo bloqueado" + (p.prazoDefinidoEm ? ` desde ${fData(p.prazoDefinidoEm)}` : "") + (p.prazoDefinidoPor ? ` por ${p.prazoDefinidoPor}` : "") + ". Correção só direto na planilha.";
+    }
+  } else {
+    f.prazoFixo.hidden = true; f.prazo.hidden = false;
+    if (!r.el.querySelector(".pd-conf[data-prazo]")) pdPor(f.prazo, p.prazo||"");
+  }
+  pdPor(f.concl, p.concluidoEm||"");
+  f.concl.dataset.cheio = p.concluidoEm ? "1" : "";
   if (document.activeElement !== f.st) { f.st.value = PD_STATUS.includes(p.status) ? p.status : "Pendente"; f.st.dataset.s = f.st.value; }
   if (document.activeElement !== f.crit) { f.crit.value = PD_CRIT.includes(p.criticidade) ? p.criticidade : ""; f.crit.dataset.c = f.crit.value; }
   f.crit.disabled = !pdTemCrit();
@@ -2700,6 +2750,7 @@ function pdAtualizar(p){
   f.st.hidden = cst; f.cst.hidden = !cst;
   f.lblSt.textContent = cst ? "Tarefa constante" : "Situação";
   f.lblPrazo.textContent = cst ? "Próxima execução" : "Prazo";
+  f.concl.hidden = cst || !pdTemConcl(); f.lblConcl.hidden = f.concl.hidden;
   f.prazo.title = cst ? "Próxima execução" : "Prazo";
   if (cst) {
     const ass = [p.frequencia, p.ultimaVez, p.prazo, pdAtrasada(p)].join("|");
@@ -2710,10 +2761,12 @@ function pdAtualizar(p){
   }
   const nova = pdNova(p);
   const quando = p.atualizadoEm ? `Atualizado em ${fData(p.atualizadoEm)} ${String(p.atualizadoEm).slice(11,16)}${p.atualizadoPor ? " por "+p.atualizadoPor : ""}` : "";
-  const assinatura = [nova, p.criadaPor, quando, ehSindico(), cst, p.ultimaVez, sub, pdTemNovos()].join("|");
+  const fimPrazo = !cst && p.status === "Concluído" && p.concluidoEm && p.prazo ? pdDias(p.prazo, p.concluidoEm) : null;
+  const assinatura = [nova, p.criadaPor, quando, ehSindico(), cst, p.ultimaVez, sub, pdTemNovos(), fimPrazo].join("|");
   if (f.meta.dataset.a !== assinatura) {
     f.meta.dataset.a = assinatura;
     f.meta.innerHTML = (nova ? `<span class="pd-nova-pill">Nova do síndico</span>${ehSindico() ? "" : `<button type="button" class="btn small pd-ciente" data-ciente="${esc(p.id)}">Ciente</button>`}` : "")
+      + (fimPrazo !== null ? `<span class="pd-fim ${fimPrazo > 0 ? "atraso" : "ok"}">${fimPrazo > 0 ? `Concluída ${fimPrazo} dia${fimPrazo===1?"":"s"} após o prazo` : "Concluída no prazo"}</span>` : "")
       + (cst ? `<span class="pd-ult">Última execução: <b>${p.ultimaVez ? fDia(p.ultimaVez) : "ainda não registrada"}</b></span>` : "")
       + `<span>${p.criadaPor && p.criadaPor !== "undefined" && p.origem && p.origem !== "undefined" ? "Incluída por " + esc(p.criadaPor) + " · " : ""}${esc(quando)}</span>`
       + (pdTemNovos() ? `<span class="pd-acoes">${sub ? "" : `<button type="button" class="link" data-sub="${esc(p.id)}">+ subitem</button>`}<button type="button" class="link" data-editar="${esc(p.id)}">editar</button></span>` : "");
@@ -2746,15 +2799,17 @@ function pdSecao(s){
 function pdNovo(secao){
   const o = PD.secs.get(secao); const ja = o.list.querySelector(".pd-new"); if (ja) { ja.querySelector("input").focus(); return; }
   const inp = pdEl("input", {class:"input", placeholder:"Descreva a nova pendência", "aria-label":"Nova pendência", id:"pdn-"+PD_SECOES.findIndex(s => s.nome === secao)});
+  const ix = PD_SECOES.findIndex(s => s.nome === secao);
+  const prz = pdEl("input", {class:"input", type:"date", id:"pdnp-"+ix, "aria-label":"Prazo (fica bloqueado depois de salvo)"});
   const ok = pdEl("button", {class:"btn small primary", type:"submit", text:"Adicionar"});
   const cancelar = pdEl("button", {class:"btn small", type:"button", text:"Cancelar"});
-  const form = pdEl("form", {class:"pd-new"}, [inp, ok, cancelar]);
+  const form = pdEl("form", {class:"pd-new"}, [inp, pdEl("label", {class:"pd-new-prazo", for:"pdnp-"+ix}, [pdEl("span", {text:"Prazo (fica bloqueado)"}), prz]), ok, cancelar]);
   cancelar.onclick = () => form.remove();
   form.addEventListener("submit", ev => {
     ev.preventDefault();
     const titulo = inp.value.trim(); if (!titulo) { inp.focus(); return; }
     ok.disabled = true;
-    pdEnviar("pendSalvar", {pend:{secao, titulo}}).then(res => { if (res) form.remove(); else ok.disabled = false; });
+    pdEnviar("pendSalvar", {pend:Object.assign({secao, titulo}, prz.value ? {prazo:prz.value} : {})}).then(res => { if (res) form.remove(); else ok.disabled = false; });
   });
   o.list.prepend(form); inp.focus();
 }
@@ -2764,7 +2819,7 @@ function renderPend(){
   const body = $("#pd-body");
   if (!PD.secs.size) { body.textContent = ""; PD_SECOES.forEach(s => body.append(pdSecao(s).sec)); }
   pdBadge();
-  $("#pd-aviso").hidden = pdTemCrit() && pdTemNovos();
+  $("#pd-aviso").hidden = pdTemCrit() && pdTemNovos() && pdTemConcl();
   const all = pdLista(), filtro = !!(PD.q || PD.st || PD.crit || PD.resp || PD.hide || PD.late || PD.novas || PD.cst);
   for (const s of PD_SECOES) {
     const o = PD.secs.get(s.nome);
@@ -2823,7 +2878,9 @@ function pdAbrirForm(o){
       <div class="field"><label for="np-crit">Criticidade <span class="req">*</span></label>
         <select class="input" id="np-crit"><option value="">Escolha</option>${["Baixa","Média","Alta"].map(x => `<option ${x===v.criticidade?"selected":""}>${x}</option>`).join("")}</select></div>
       <div class="field" id="np-st-box"><label for="np-st">Situação</label><select class="input" id="np-st">${PD_STATUS.map(x => `<option ${x===v.status?"selected":""}>${x}</option>`).join("")}</select></div>
-      <div class="field"><label for="np-prazo" id="np-prazo-lbl">Prazo</label><input class="input" id="np-prazo" type="date" value="${esc(v.prazo||"")}"></div>
+      <div class="field"><label for="np-prazo" id="np-prazo-lbl">Prazo</label><input class="input" id="np-prazo" type="date" value="${esc(v.prazo||"")}" ${ed && pdPrazoFixo(ed) ? "disabled" : ""}>
+        <span class="hint" id="np-prazo-dica">${ed && pdPrazoFixo(ed) ? `Bloqueado${ed.prazoDefinidoEm ? " desde " + esc(fData(ed.prazoDefinidoEm)) : ""}${ed.prazoDefinidoPor ? " por " + esc(ed.prazoDefinidoPor) : ""}. Correção só direto na planilha.` : "Depois de salvo, o prazo fica bloqueado."}</span></div>
+      ${ed && pdTemConcl() ? `<div class="field" id="np-concl-box"><label for="np-concl">Concluída em</label><input class="input" id="np-concl" type="date" max="${hoje()}" value="${esc(ed.concluidoEm||"")}"><span class="hint">Entra sozinha ao marcar como Concluído.</span></div>` : ""}
       <div class="field"><label for="np-resp">Responsável</label><input class="input" id="np-resp" list="pd-resps" placeholder="Opcional" value="${esc(v.responsavel||"")}"></div>
       ${execs.length ? `<div class="field full"><span class="lbl-campo">Últimas execuções</span><ul class="pd-execs">${execs.slice(0,8).map(x => `<li><b>${fData(x.slice(0,10))}</b> ${esc(x.slice(11))}</li>`).join("")}</ul></div>` : ""}
       ${ehSindico() && !ed ? `<p class="hint full">A administração recebe a pendência destacada como "Nova do síndico".</p>` : ""}
@@ -2836,6 +2893,10 @@ function pdAbrirForm(o){
     if ($("#np-freq-box")) $("#np-freq-box").hidden = !cst;
     $("#np-st-box").hidden = cst || !ed;
     $("#np-prazo-lbl").textContent = cst ? (ed ? "Próxima execução" : "Primeira execução") : "Prazo";
+    const fixo = !!(ed && pdPrazoFixo(ed) && !cst);
+    $("#np-prazo").disabled = fixo;
+    $("#np-prazo-dica").hidden = cst;
+    if ($("#np-concl-box")) $("#np-concl-box").hidden = cst;
   };
   $$('input[name="np-tipo"]').forEach(r => r.addEventListener("change", ajustaTipo));
   ajustaTipo();
@@ -2852,6 +2913,11 @@ function pdAbrirForm(o){
     const dados = {titulo, obs:$("#np-obs").value.trim(), prazo:$("#np-prazo").value, responsavel:$("#np-resp").value.trim(), criticidade};
     if (novos) { dados.tipo = tipoSel(); if (dados.tipo === "Constante") dados.frequencia = $("#np-freq").value; }
     if (ed && !$("#np-st-box").hidden) dados.status = $("#np-st").value;
+    if ($("#np-concl") && !$("#np-concl-box").hidden) {
+      const c = $("#np-concl").value;
+      if (c && c > hoje()) { msg.textContent = "A data de conclusão não pode ser depois de hoje."; $("#np-concl").focus(); return; }
+      if (c !== String(ed.concluidoEm || "")) { dados.concluidoEm = c; if (c && !dados.status) dados.status = "Concluído"; }
+    }
     let pend;
     if (ed) {
       pend = {id: ed.id};
@@ -2884,6 +2950,7 @@ function pdTextoEmail(){
       if (p.criticidade) x.push("criticidade " + String(p.criticidade).toLowerCase());
       if (String(p.obs||"").trim()) x.push(String(p.obs).trim());
       if (p.prazo && (pdConst(p) || p.status !== "Concluído")) x.push((pdConst(p) ? "próxima " : "prazo ") + fData(p.prazo).slice(0,5));
+      if (!pdConst(p) && p.status === "Concluído" && p.concluidoEm) x.push("concluída em " + fData(p.concluidoEm).slice(0,5));
       if (String(p.responsavel||"").trim()) x.push("resp.: " + String(p.responsavel).trim());
       if (x.length) ln += " (" + x.join("; ") + ")";
       L.push(ln);

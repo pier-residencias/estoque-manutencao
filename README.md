@@ -73,6 +73,8 @@ Cada pendência tem **criticidade** (Baixa, Média ou Alta), escolhida na própr
 
 **Subitens.** Cada pendência tem **+ subitem**: o subitem recebe o número N.1, N.2… e fica logo abaixo do item. Não há subitem de subitem. Excluir um item exclui também os subitens dele, e mudar a seção leva os subitens junto.
 
+**Prazo bloqueado e data de conclusão.** Em pendência pontual, o prazo fica **bloqueado** depois de definido: na linha, ao escolher a data aparece a confirmação **Bloquear prazo**; ao incluir (formulário ou **+ Adicionar item**) o prazo informado já entra bloqueado. Bloqueado, ele aparece com um cadeado e o servidor recusa qualquer mudança; correção só direto na coluna Prazo da aba Pendencias. Ficam registrados **Prazo definido em** e **Prazo definido por**. A coluna **Concluída em** recebe a data de hoje quando a situação vira Concluído (dá para corrigir; não aceita data futura), é apagada se a pendência for reaberta, e preenchê-la à mão conclui a pendência. A linha concluída mostra "Concluída no prazo" ou "Concluída N dias após o prazo", e o texto do e-mail leva "concluída em dd/mm". Tarefa constante não tem bloqueio (o prazo dela é a próxima execução) nem data de conclusão.
+
 **Editar.** O link **editar** de cada linha abre todos os campos: seção, descrição, detalhes, tipo e frequência, criticidade, situação, prazo e responsável.
 
 Para incluir, use **+ Incluir pendência** (no topo da tela ou em **Administração → Incluir pendência**): seção, descrição, detalhes, prazo e responsável.

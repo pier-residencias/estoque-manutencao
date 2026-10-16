@@ -435,7 +435,7 @@ nav.tabs .admmenu button span{font-size:.78rem;color:var(--muted)}
 .pd-sec .sbar i{display:block;height:100%;background:var(--ok)}
 .pd-sec .sh .btn{margin-left:auto}
 .pd-list{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.pd-row{display:grid;grid-template-columns:36px minmax(0,1fr) 168px 112px 130px 148px 28px;gap:10px;align-items:start;padding:10px 12px;border-top:1px solid var(--line)}
+.pd-row{display:grid;grid-template-columns:36px minmax(0,1fr) 160px 108px 124px 136px 136px 28px;gap:10px;align-items:start;padding:10px 12px;border-top:1px solid var(--line)}
 .pd-row:first-child{border-top:0}
 .pd-row.sub{padding-left:30px;background:color-mix(in srgb,var(--surface-2) 45%,var(--surface))}
 .pd-num{font-family:var(--f-mono);font-size:.8rem;color:var(--muted);padding-top:8px;font-variant-numeric:tabular-nums}
@@ -457,7 +457,7 @@ nav.tabs .admmenu button span{font-size:.78rem;color:var(--muted)}
 .pd-st[data-s="Pendente"]{color:var(--crit);background-color:var(--crit-bg);border-color:transparent}
 .pd-st option{color:var(--fg);background:var(--surface)}
 .pd-row.late .pd-prazo{border-color:var(--crit);color:var(--crit);font-weight:700}
-.pd-lbl{display:none;font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.pd-lbl{display:block;font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
 .pd-del{background:none;border:0;color:var(--muted);cursor:pointer;font-size:1.2rem;line-height:1;padding:8px 4px;border-radius:4px}
 .pd-del:hover{color:var(--crit)}
 .pd-conf{grid-column:2/-1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:.88rem}
@@ -469,10 +469,21 @@ nav.tabs .admmenu button span{font-size:.78rem;color:var(--muted)}
   .pd-row .pd-main{grid-column:2/-1}
   .pd-row .c-st{grid-column:2/3} .pd-row .c-crit{grid-column:3/4}
   .pd-row .c-resp{grid-column:2/3} .pd-row .c-prazo{grid-column:3/4}
-  .pd-row .c-del{grid-column:3/4;justify-self:end}
+  .pd-row .c-concl{grid-column:2/3}
+  .pd-row .c-del{grid-column:3/4;justify-self:end;align-self:end}
   .pd-row.sub{padding-left:12px}
-  .pd-lbl{display:block}
 }
+/* prazo bloqueado e data de conclusão */
+.pd-prazo-fixo{display:flex;align-items:center;gap:6px;padding:7px 8px;font-size:.88rem;font-variant-numeric:tabular-nums;border:1px dashed var(--line);border-radius:6px;background:var(--surface-2);color:var(--fg);min-width:0;cursor:help}
+.pd-prazo-fixo svg{flex:0 0 auto;width:13px;height:13px;color:var(--muted)}
+.pd-row.late .pd-prazo-fixo{border-color:var(--crit);color:var(--crit);font-weight:700}
+.pd-row.late .pd-prazo-fixo svg{color:var(--crit)}
+.pd-concl[data-cheio="1"]{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,var(--line))}
+.pd-fim{font-weight:700;margin-right:6px}
+.pd-fim.ok{color:var(--ok)} .pd-fim.atraso{color:var(--crit)}
+.pd-new-prazo{display:grid;gap:2px;flex:0 1 170px}
+.pd-new-prazo span{font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.pd-new-prazo .input{flex:none;width:100%}
 
 /* Pendências incluídas pelo síndico */
 nav.tabs button.admbtn .badge{margin-left:2px}

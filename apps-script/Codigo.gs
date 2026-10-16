@@ -104,7 +104,8 @@ const ABAS = {
       ['atualizadoEm', 'Atualizado em'], ['atualizadoPor', 'Atualizado por'],
       ['criadaPor', 'Incluída por'], ['origem', 'Origem'], ['vistaEm', 'Vista em'], ['vistaPor', 'Vista por'],
       ['criticidade', 'Criticidade'], ['tipo', 'Tipo'], ['frequencia', 'Frequência'], ['ultimaVez', 'Última execução'],
-      ['execucoes', 'Execuções'], ['pai', 'Subitem de']
+      ['execucoes', 'Execuções'], ['pai', 'Subitem de'],
+      ['concluidoEm', 'Concluída em'], ['prazoDefinidoEm', 'Prazo definido em'], ['prazoDefinidoPor', 'Prazo definido por']
     ],
     num: ['ordem']
   },
@@ -185,7 +186,7 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
-const VERSAO = '2026-10-15 numeração';
+const VERSAO = '2026-10-15 prazo bloqueado';
 
 function doGet() {
   return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
@@ -1769,7 +1770,8 @@ function pendLista() {
     .map(p => ({ id: p.id, secao: p.secao, numero: p.numero, titulo: p.titulo, status: p.status, responsavel: p.responsavel,
       prazo: p.prazo, obs: p.obs, ordem: p.ordem, atualizadoEm: p.atualizadoEm, atualizadoPor: p.atualizadoPor,
       criadaPor: p.criadaPor, origem: p.origem, vistaEm: p.vistaEm, vistaPor: p.vistaPor, criticidade: p.criticidade,
-      tipo: p.tipo, frequencia: p.frequencia, ultimaVez: p.ultimaVez, execucoes: p.execucoes, pai: p.pai }))
+      tipo: p.tipo, frequencia: p.frequencia, ultimaVez: p.ultimaVez, execucoes: p.execucoes, pai: p.pai,
+      concluidoEm: p.concluidoEm, prazoDefinidoEm: p.prazoDefinidoEm, prazoDefinidoPor: p.prazoDefinidoPor }))
     .sort((a, b) => (Number(a.ordem) || 1e9) - (Number(b.ordem) || 1e9));
 }
 
@@ -1882,7 +1884,22 @@ function pendSalvar(v, conta) {
   if ('status' in v) { if (PEND_STATUS.indexOf(v.status) < 0) throw falha('Situação inválida.'); obj.status = v.status; }
   if ('responsavel' in v) obj.responsavel = texto(v.responsavel, 60);
   if ('criticidade' in v) { if (v.criticidade && PEND_CRITICIDADE.indexOf(v.criticidade) < 0) throw falha('Criticidade inválida.'); obj.criticidade = v.criticidade || ''; }
-  if ('prazo' in v) obj.prazo = /^\d{4}-\d{2}-\d{2}$/.test(String(v.prazo || '')) ? String(v.prazo) : '';
+  // prazo de pendência pontual: depois de definido fica bloqueado (correção só direto na planilha).
+  // Na tarefa constante o prazo é a próxima execução e continua livre.
+  const constFinal = 'tipo' in v ? v.tipo === 'Constante' : !!(atual && atual.tipo === 'Constante');
+  if ('prazo' in v) {
+    obj.prazo = /^\d{4}-\d{2}-\d{2}$/.test(String(v.prazo || '')) ? String(v.prazo) : '';
+    const prazoAntes = atual ? String(atual.prazo || '').slice(0, 10) : '';
+    if (atual && atual.tipo !== 'Constante' && prazoAntes && obj.prazo !== prazoAntes) {
+      if (constFinal && !obj.prazo) delete obj.prazo; // virou tarefa constante: a próxima execução é calculada abaixo
+      else throw falha('O prazo desta pendência está bloqueado (' + prazoAntes.split('-').reverse().join('/') + '). Para corrigir, altere direto na aba Pendencias da planilha.');
+    }
+    if (!constFinal && obj.prazo && (!atual || !prazoAntes || atual.tipo === 'Constante')) { obj.prazoDefinidoEm = agora(); obj.prazoDefinidoPor = conta.nome; }
+  }
+  if ('concluidoEm' in v) {
+    obj.concluidoEm = /^\d{4}-\d{2}-\d{2}$/.test(String(v.concluidoEm || '')) ? String(v.concluidoEm) : '';
+    if (obj.concluidoEm && obj.concluidoEm > hoje()) throw falha('A data de conclusão não pode ser depois de hoje.');
+  }
   if ('obs' in v) obj.obs = texto(v.obs, 1000);
   if ('tipo' in v) obj.tipo = v.tipo === 'Constante' ? 'Constante' : '';
   if ('frequencia' in v) { if (v.frequencia && !PEND_FREQ.some(f => f[0] === v.frequencia)) throw falha('Frequência inválida.'); obj.frequencia = v.frequencia || ''; }
@@ -1893,6 +1910,14 @@ function pendSalvar(v, conta) {
     const prazoFinal = 'prazo' in obj ? obj.prazo : (atual ? atual.prazo : '');
     if (!prazoFinal) obj.prazo = proximaData(hoje(), freqFinal);
     if (!atual || atual.status === 'Concluído' || obj.status === 'Concluído') obj.status = 'Em andamento';
+    if (atual && atual.concluidoEm) obj.concluidoEm = '';
+    else delete obj.concluidoEm;
+  } else {
+    // data de conclusão: entra sozinha ao concluir, some ao reabrir; preenchida à mão, conclui
+    const stAntes = atual ? atual.status : '';
+    if (obj.concluidoEm && (obj.status || stAntes) !== 'Concluído') obj.status = 'Concluído';
+    if (obj.status === 'Concluído' && stAntes !== 'Concluído' && !('concluidoEm' in obj)) obj.concluidoEm = hoje();
+    if (obj.status && obj.status !== 'Concluído' && atual && atual.concluidoEm) obj.concluidoEm = '';
   }
 
   if (atual) {
@@ -1913,6 +1938,9 @@ function pendSalvar(v, conta) {
     }
     gravar(t, obj, atual._row);
     if (obj.secao) return 'Movida para ' + obj.secao + ' como nº ' + obj.numero + '.';
+    const dm = d => String(d).split('-').reverse().slice(0, 2).join('/');
+    if (obj.prazoDefinidoEm && atual.tipo !== 'Constante' && !constFinal) return 'Prazo ' + dm(obj.prazo) + ' definido e bloqueado.';
+    if ('concluidoEm' in v && obj.concluidoEm) return 'Concluída em ' + dm(obj.concluidoEm) + '.';
     return obj.status && 'status' in v ? 'Situação: ' + obj.status + '.' : 'criticidade' in v && Object.keys(v).length <= 2 ? 'Criticidade: ' + (obj.criticidade || 'sem definição') + '.' : 'Salvo.';
   }
 
@@ -1932,6 +1960,7 @@ function pendSalvar(v, conta) {
     Object.assign(obj, comuns, {
       id: novoId('pd'), secao: pai.secao, numero, pai: pai.id,
       status: obj.status || 'Pendente', responsavel: obj.responsavel || '', prazo: obj.prazo || '', obs: obj.obs || '',
+      concluidoEm: obj.concluidoEm || '', prazoDefinidoEm: obj.prazoDefinidoEm || '', prazoDefinidoPor: obj.prazoDefinidoPor || '',
       criticidade: obj.criticidade || pai.criticidade || '', tipo: obj.tipo || '', frequencia: obj.frequencia || '',
       ordem: depois ? (fim + Number(depois.ordem)) / 2 : fim + 1
     });
@@ -1946,6 +1975,7 @@ function pendSalvar(v, conta) {
     id: novoId('pd'), secao, pai: '',
     numero: String((nums.length ? Math.max.apply(null, nums) : 0) + 1),
     status: obj.status || 'Pendente', responsavel: obj.responsavel || '', prazo: obj.prazo || '', obs: obj.obs || '',
+    concluidoEm: obj.concluidoEm || '', prazoDefinidoEm: obj.prazoDefinidoEm || '', prazoDefinidoPor: obj.prazoDefinidoPor || '',
     criticidade: obj.criticidade || '', tipo: obj.tipo || '', frequencia: obj.frequencia || '',
     ordem: Math.max.apply(null, [base].concat(daSecao.map(p => Number(p.ordem) || 0))) + 1
   });
