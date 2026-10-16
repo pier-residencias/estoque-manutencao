@@ -642,3 +642,15 @@ div.ac-pessoa{cursor:default}
 .ap-motivo label{font-size:.85rem;font-weight:600}
 .ap-res{margin:6px 0 0;padding-left:18px}
 .ap-res li.ok{color:var(--ok)} .ap-res li.err{color:var(--crit)}
+
+/* integridade do estoque: itens bloqueados e verificação automática */
+.pill.st-bloq{background:var(--crit-bg);color:var(--crit)}
+.ap-card.bloq{border-color:color-mix(in srgb,var(--crit) 45%,var(--line))}
+.ap-verif{margin:4px 0 12px;font-size:.9rem;color:var(--muted)}
+.ap-verif b{color:var(--fg)}
+.ap-verif.err{color:var(--crit)}
+.ap-alertas{margin:0 0 14px;font-size:.9rem}
+.ap-alertas summary{cursor:pointer;font-weight:600}
+.ap-alertas ul{margin:6px 0 0;padding-left:18px;display:grid;gap:4px}
+#ap-integ .ap-lista{margin-bottom:18px}
+.ct-tab tr.ct-bloq .pill{white-space:normal;line-height:1.35}

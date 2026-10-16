@@ -88,7 +88,7 @@ async function api(acao, extra){
   }
   if (!r.ok) {
     if ((r.codigo === "senha" || r.codigo === "sessao") && !(acao === "entrar" && extra && extra.senha !== undefined)) { encerrarLocal(r.erro || "Sua sessão terminou. Entre de novo."); }
-    throw {paraUsuario:true, message:r.erro || "Não foi possível concluir."};
+    throw {paraUsuario:true, message:r.erro || "Não foi possível concluir.", codigo:r.codigo || ""};
   }
   if (r.token) { S.token = r.token; guardar(); }
   if (r.perms) { S.perms = r.perms; aplicarPermissoes(); }
@@ -106,6 +106,9 @@ function aplicar(d){
   S.locais = d.locais || {};
   S.contagens = d.contagens || [];
   S.ajPend = new Set(d.ajustesPendentes || []);
+  S.bloq = new Map((d.bloqueios || []).map(b => [b.itemId, b]));
+  S.integridade = d.integridade || null;
+  S.adminsAtivos = d.adminsAtivos;
   renderSetorSel();
   S.movs = d.movs || [];
   S.os = d.os || [];
@@ -504,7 +507,7 @@ function renderItens(){
     <td class="hide-s">${esc(i.local||"—")}</td>
     <td class="n"><b>${fNum(i.qtd)}</b> <span class="muted">${esc(i.unidade||"")}</span></td>
     <td class="n hide-s">${Number(i.minimo)>0?fNum(i.minimo):"—"}</td>
-    <td>${stPill(statusItem(i))}${S.ajPend && S.ajPend.has(i.id) ? ' <span class="pill st-aberta" title="Contagem com diferença aguardando a Administração">Ajuste pendente</span>' : ""}</td>
+    <td>${stPill(statusItem(i))}${S.ajPend && S.ajPend.has(i.id) ? ' <span class="pill st-aberta" title="Contagem com diferença aguardando a Administração">Ajuste pendente</span>' : ""}${S.bloq && S.bloq.has(i.id) ? ` <span class="pill st-bloq" title="${esc(S.bloq.get(i.id).motivo)}">Bloqueado</span>` : ""}</td>
     <td class="n"><button class="btn small" data-item="${esc(i.id)}">${can("itens_editar")?"Editar":"Ver"}</button></td></tr>`).join("")
     : `<tr><td colspan="9"><div class="empty">${carregando ? `<span class="spin" aria-hidden="true"></span> Buscando as movimentações de ${esc(descPer())}…` : pt && all.length ? `Nenhum item ${{cad:"cadastrado", ent:"com entrada", sai:"com saída ou troca", mov:"com movimento"}[pt]} em ${esc(descPer())}.` : all.length ? "Nenhum item com esses filtros." : (S.ultima ? "Nenhum item cadastrado ainda. Cadastre o primeiro em <b>Novo item</b>." : "Carregando os itens da planilha…")}</div></td></tr>`;
 }
@@ -554,7 +557,7 @@ function abrirItem(id, depois){
       <div class="field"><label for="it-cat">Categoria</label><input class="input" id="it-cat" value="${esc(v.categoria)}" list="dl-cat" placeholder="Ex.: Elétrica" ${ro}></div>
       <div class="field"><label for="it-local">Local de guarda</label><input class="input" id="it-local" value="${esc(v.local)}" placeholder="Ex.: Prateleira A3" ${ro}></div>
       ${novo ? `<div class="field"><label for="it-qtd">Quantidade inicial</label><input class="input num" id="it-qtd" inputmode="decimal" value="" placeholder="0" ${ro || (can("contagem_registrar") ? "" : "disabled")}><span class="hint">${can("contagem_registrar") ? "O item é cadastrado com 0. A quantidade vai para a aprovação da Administração." : "O item é cadastrado com estoque 0."}</span></div>`
-        : `<div class="field"><label for="it-qtd">Estoque atual</label><input class="input num" id="it-qtd" value="${numTxt(v.qtd)}" disabled><span class="hint">${S.ajPend && S.ajPend.has(it.id) ? "Há um ajuste deste item aguardando aprovação." : "Para corrigir, faça uma contagem: ela vai para aprovação."}${podeAba("contagem") && !(S.ajPend && S.ajPend.has(it.id)) ? ` <button type="button" class="link" id="it-contar">Contar este item</button>` : ""}</span></div>`}
+        : `${S.bloq && S.bloq.has(it.id) ? `<div class="notice warn full"><b>Item bloqueado para revisão:</b> ${esc(S.bloq.get(it.id).motivo)} Nenhuma alteração é aceita até a Administração liberar.</div>` : ""}<div class="field"><label for="it-qtd">Estoque atual</label><input class="input num" id="it-qtd" value="${numTxt(v.qtd)}" disabled><span class="hint">${S.ajPend && S.ajPend.has(it.id) ? "Há um ajuste deste item aguardando aprovação." : "Para corrigir, faça uma contagem: ela vai para aprovação."}${podeAba("contagem") && !(S.ajPend && S.ajPend.has(it.id)) ? ` <button type="button" class="link" id="it-contar">Contar este item</button>` : ""}</span></div>`}
       <div class="field"><label for="it-un">Unidade</label><select class="input" id="it-un" ${ro}>${unidades.map(u=>`<option ${u===v.unidade?"selected":""}>${esc(u)}</option>`).join("")}</select></div>
       <div class="field"><label for="it-min">Estoque mínimo</label><input class="input num" id="it-min" inputmode="decimal" value="${Number(v.minimo)>0?numTxt(v.minimo):""}" placeholder="Avisa quando ficar abaixo" ${ro}></div>
       <div class="field full"><label for="it-obs">Observação</label><textarea class="input" id="it-obs" ${ro}>${esc(v.obs||"")}</textarea></div>
@@ -2516,7 +2519,22 @@ function abrirImportacao(){
     const modo = ($("input[name=imp-modo]:checked") || {}).value || "atualizar";
     const comHist = lido.hist && lido.hist.length && $("#imp-hist") && $("#imp-hist").checked;
     const extraHist = comHist ? {historico: lido.hist, dataAjuste: lido.hist.map(h => h.data).sort()[0]} : {};
-    await enviar($("#imp-ok"), $("#imp-msg"), "importarContagem", Object.assign({linhas: lido.itens, modo, motivo: $("#imp-mot").value.trim(), setor: S.setor}, extraHist), () => { fecharModal(); setTab("itens"); });
+    const corpo = Object.assign({linhas: lido.itens, modo, motivo: $("#imp-mot").value.trim(), setor: S.setor}, extraHist);
+    const fim = () => { fecharModal(); setTab("itens"); };
+    const btn = $("#imp-ok"), msg = $("#imp-msg");
+    btn.disabled = true; msg.className = "hint"; msg.innerHTML = `<span class="spin" aria-hidden="true"></span> Enviando…`;
+    try {
+      let r;
+      try { r = await api("importarContagem", corpo); }
+      catch(e){
+        if (e.codigo !== "importacao_repetida") throw e;
+        // mesma planilha já importada: só reenvia se a pessoa confirmar
+        if (!confirm(e.message + "\n\nEnviar mesmo assim?")) { msg.className = "hint err"; msg.textContent = "Importação cancelada: esta planilha já tinha sido enviada."; return; }
+        r = await api("importarContagem", Object.assign({confirmarRepeticao:true}, corpo));
+      }
+      fim(); toast(r.msg || "Importado.");
+    } catch(e){ msg.className = "hint err"; msg.textContent = e.message || "Não foi possível importar."; }
+    finally { btn.disabled = false; }
   });
 }
 $("#i-importar").addEventListener("click", abrirImportacao);
@@ -3073,8 +3091,10 @@ const ctDif = d => { d = Number(d)||0; return d === 0 ? `<span class="ct-dif igu
 const ctData = s => s ? `${fData(String(s).slice(0,10))} ${esc(String(s).slice(11,16))}` : "—";
 const CT = {q:"", local:"", cat:"", val:new Map(), msg:"", enviando:false};
 const AP = {sel:new Set(), filtro:"Aprovada", aberto:null, enviando:false, ultimos:[]};
-const ctMinhas = () => (S.contagens||[]).filter(c => c.contadoPor === S.usuario);
-const apDecidiveis = () => (S.contagens||[]).filter(c => c.status === "Pendente" && !c.etapa && c.contadoPor !== S.usuario);
+// "minha" vem do servidor, que compara o identificador fixo da conta (não o nome)
+const ctEhMinha = c => c.minha !== undefined ? !!c.minha : c.contadoPor === S.usuario;
+const ctMinhas = () => (S.contagens||[]).filter(ctEhMinha);
+const apDecidiveis = () => (S.contagens||[]).filter(c => c.status === "Pendente" && !c.etapa && !ctEhMinha(c));
 // contagens devolvidas para reconferir que ainda não tiveram uma contagem nova do mesmo item
 function ctParaRecontar(){
   const minhas = ctMinhas();
@@ -3082,7 +3102,7 @@ function ctParaRecontar(){
 }
 function ctBadges(){
   const b = $("#b-cont"); if (b) { const n = ctParaRecontar().length; b.textContent = n; b.hidden = !n; b.title = n ? `${n} contage${n===1?"m":"ns"} para refazer` : ""; }
-  const ba = $("#b-aprov"); if (ba) { const n = ehAdminTotal() ? apDecidiveis().length : 0; ba.textContent = n; ba.hidden = !n; }
+  const ba = $("#b-aprov"); if (ba) { const n = ehAdminTotal() ? apDecidiveis().length + (S.bloq ? S.bloq.size : 0) : 0; ba.textContent = n; ba.hidden = !n; }
 }
 
 function renderContagem(){
@@ -3110,13 +3130,14 @@ function renderContagem(){
   const lista = todos.filter(i => (!CT.local || i.local === CT.local) && (!CT.cat || i.categoria === CT.cat) && (!q || norm([i.nome,i.codigo,i.local,i.categoria].join(" ")).includes(q)));
   if (!digitando) {
     $("#ct-body").innerHTML = lista.length ? lista.map(i => {
-      const p = pend.get(i.id) || (ajPend.has(i.id) ? {numero:""} : null);
+      const bq = S.bloq && S.bloq.get(i.id);
+      const p = pend.get(i.id) || (ajPend.has(i.id) ? {numero:""} : null) || (bq ? {bloq:bq} : null);
       const v = CT.val.get(i.id) || {};
       const mudou = v.qtd !== undefined && v.qtd !== "" && v.saldoVisto !== undefined && Number(v.saldoVisto) !== Number(i.qtd);
       return `<tr data-ct="${esc(i.id)}" class="${p ? "ct-bloq" : ""}">
         <td><b>${esc(i.nome)}</b><span class="sub"><span class="mono">${esc(i.codigo||"")}</span>${i.local ? " · " + esc(i.local) : ""}</span></td>
         <td class="n ct-sis"><span class="ct-lbl">No sistema</span><b>${fNum(i.qtd)}</b> <span class="muted">${esc(i.unidade||"")}</span></td>
-        ${p ? `<td colspan="3"><span class="pill st-aberta">Ajuste aguardando aprovação${p.numero ? " · " + esc(p.numero) : ""}</span></td>` : `
+        ${p ? `<td colspan="3">${p.bloq ? `<span class="pill st-bloq" title="${esc(p.bloq.motivo)}">Bloqueado: aguardando revisão da Administração</span>` : `<span class="pill st-aberta">Ajuste aguardando aprovação${p.numero ? " · " + esc(p.numero) : ""}</span>`}</td>` : `
         <td class="ct-cont"><label class="ct-lbl" for="ctq-${esc(i.id)}">Contei</label><input class="input num ct-q" id="ctq-${esc(i.id)}" inputmode="decimal" autocomplete="off" placeholder="—" value="${esc(v.qtd||"")}" aria-label="Quantidade contada de ${esc(i.nome)}"></td>
         <td class="ct-res">${ctResultado(i, v, mudou)}</td>
         <td class="ct-just"><input class="input" id="ctj-${esc(i.id)}" placeholder="Por que está diferente?" value="${esc(v.just||"")}" aria-label="Justificativa da diferença em ${esc(i.nome)}" ${ctPrecisaJust(i, v) ? "" : "hidden"}></td>`}
@@ -3217,9 +3238,10 @@ function renderAprov(){
   if (!$("#t-aprovacoes") || !ehAdminTotal()) return;
   const todas = S.contagens || [];
   const pend = todas.filter(c => c.status === "Pendente" || c.etapa === "aplicando").sort((a,b) => String(a.contadoEm).localeCompare(String(b.contadoEm)));
-  for (const id of [...AP.sel]) if (!pend.some(c => c.id === id && c.contadoPor !== S.usuario)) AP.sel.delete(id);
-  const decid = pend.filter(c => c.contadoPor !== S.usuario && !c.etapa);
-  const minhasP = pend.filter(c => c.contadoPor === S.usuario).length;
+  for (const id of [...AP.sel]) if (!pend.some(c => c.id === id && !ctEhMinha(c))) AP.sel.delete(id);
+  const decid = pend.filter(c => !ctEhMinha(c) && !c.etapa);
+  const minhasP = pend.filter(ctEhMinha).length;
+  renderIntegridade();
   const recont = todas.filter(c => c.status === "Reconferir").length;
   $("#ap-stats").innerHTML = `<div class="ap-stat"><b>${decid.length}</b><span>para analisar</span></div>`
     + (minhasP ? `<div class="ap-stat"><b>${minhasP}</b><span>contadas por você (outra pessoa aprova)</span></div>` : "")
@@ -3230,7 +3252,7 @@ function renderAprov(){
       <button class="btn primary" type="button" id="ap-aprovar-sel" ${nsel && !AP.enviando ? "" : "disabled"}>Aprovar selecionadas${nsel ? " (" + nsel + ")" : ""}</button>
       <span class="hint">Cada uma é conferida de novo no servidor antes de alterar o saldo.</span>` : "";
   $("#ap-lista").innerHTML = pend.length ? pend.map(c => {
-    const minha = c.contadoPor === S.usuario, atual = S.itens.get(c.itemId);
+    const minha = ctEhMinha(c), atual = S.itens.get(c.itemId);
     const mudou = atual && Number(atual.qtd) !== Number(c.saldoContagem);
     const extra = [c.novo ? "Item novo: este é o saldo inicial." : "", c.remover ? "Fora da lista do inventário: ao aprovar, fica com 0 e sai do cadastro." : "", c.historico ? `Inclui ${c.historico} lançamento${c.historico===1?"":"s"} antigo${c.historico===1?"":"s"} da planilha, com as datas originais.` : ""].filter(Boolean);
     const aberto = AP.aberto && AP.aberto.id === c.id ? AP.aberto.op : "";
@@ -3249,6 +3271,7 @@ function renderAprov(){
       <p class="ap-quem">Contado por <b>${esc(c.contadoPorNome)}</b> <span class="mono muted">${esc(c.contadoPor)}</span></p>
       <p class="ap-just"><span>Justificativa</span>${esc(c.justificativa || "—")}</p>
       ${extra.length ? `<p class="hint">${esc(extra.join(" "))}</p>` : ""}
+      ${S.bloq && S.bloq.has(c.itemId) ? `<div class="notice warn">Item bloqueado para revisão (veja acima). Libere o item antes de decidir.</div>` : ""}
       ${mudou ? `<div class="notice warn">O saldo atual é <b>${fNum(atual.qtd)}</b>, diferente do momento da contagem. Ao aprovar, ela vai para Reconferir sem alterar nada.</div>` : ""}
       ${minha ? `<div class="notice">Contagem sua: outra pessoa da Administração precisa analisar.</div>` : c.etapa ? "" : aberto ? `
         <div class="ap-motivo"><label for="ap-mot-${esc(c.id)}">${aberto === "rejeitar" ? "Motivo da rejeição" : "O que precisa ser conferido de novo?"} <span class="req">*</span></label>
@@ -3271,6 +3294,30 @@ function renderAprov(){
     : `<tr><td colspan="7"><div class="empty">Nenhuma decisão com esse filtro nos últimos 90 dias.</div></td></tr>`;
   ctBadges();
 }
+// itens bloqueados, situação da verificação automática e aviso de administradores
+function renderIntegridade(){
+  const box = $("#ap-integ"); if (!box) return;
+  const I = S.integridade || {}, u = I.ultima, partes = [];
+  if (S.adminsAtivos !== undefined && S.adminsAtivos < 2) partes.push(`<div class="notice warn"><b>Só ${S.adminsAtivos === 1 ? "1 login" : "nenhum login"} de Administração ativo.</b> Contagens feitas por ${S.adminsAtivos === 1 ? "ele" : "Administração"} ficam pendentes: a aprovação precisa de outra pessoa, com login individual (não use login compartilhado).</div>`);
+  const rot = {ok:"Tudo certo", corrigido:"Operação interrompida corrigida", atencao:"Precisa de atenção", ocupado:"Sistema ocupado: tenta na próxima rodada", erro:"Erro na verificação"};
+  partes.push(`<p class="ap-verif ${u && (u.resultado === "atencao" || u.resultado === "erro") ? "err" : ""}"><b>Verificação automática:</b> ${u ? `${esc(rot[u.resultado] || u.resultado)} · ${ctData(u.em)} · ${esc(u.txt || "")}` : "ainda não rodou (o acionador de tempo não está instalado nesta planilha)."}</p>`);
+  if (I.alertas && I.alertas.length) partes.push(`<details class="ap-alertas"><summary>Alertas recentes (${I.alertas.length})</summary><ul>${I.alertas.map(a => `<li><span class="muted">${ctData(a.em)}</span> ${esc(a.txt)}</li>`).join("")}</ul></details>`);
+  const bl = S.bloq ? [...S.bloq.values()] : [];
+  if (bl.length) partes.push(`<h3 class="sub-sec">Itens bloqueados para revisão (${bl.length})</h3><div class="ap-lista">${bl.map(b => {
+    const it = S.itens.get(b.itemId), aberto = AP.lib && AP.lib.id === b.itemId ? AP.lib.op : "";
+    const podeRestaurar = b.tipo === "saldo_externo" && it;
+    return `<article class="ap-card bloq" data-bq="${esc(b.itemId)}">
+      <div class="ap-top"><span class="pill st-bloq">${b.tipo === "recuperacao" ? "Recuperação sem consistência" : "Saldo alterado fora do sistema"}</span><span class="ap-quando">desde ${ctData(b.desde)}</span></div>
+      <h4>${esc(b.itemNome || (it && it.nome) || b.itemId)} <span class="mono muted">${esc(b.itemCodigo || "")}</span></h4>
+      ${b.saldoSistema !== undefined || b.saldoPlanilha !== undefined ? `<div class="ap-nums">${b.saldoSistema !== undefined ? `<div><span>Gravado pelo sistema</span><b>${fNum(b.saldoSistema)}</b></div>` : ""}<div><span>Na planilha agora</span><b>${it ? fNum(it.qtd) : "—"}</b></div></div>` : ""}
+      <p class="ap-just"><span>Motivo</span>${esc(b.motivo)}</p>
+      ${aberto ? `<div class="ap-motivo"><label for="bq-mot-${esc(b.itemId)}">O que foi conferido? <span class="req">*</span></label><textarea class="input" id="bq-mot-${esc(b.itemId)}" rows="2"></textarea>
+        <p class="hint">${aberto === "restaurar" ? `O saldo volta para ${fNum(b.saldoSistema)}, o último gravado pelo sistema.` : b.tipo === "saldo_externo" ? "O saldo atual fica e a diferença entra no histórico como Ajuste decidido por você." : "O saldo atual fica. Recomenda-se uma nova contagem do item."}</p>
+        <div class="actions"><button class="btn primary" type="button" data-bqconf="${aberto}">Liberar o item</button><button class="btn" type="button" data-bqcancel>Voltar</button></div></div>`
+      : `<div class="actions ap-acoes"><button class="btn" type="button" data-bqop="manter">Manter o saldo atual</button>${podeRestaurar ? `<button class="btn" type="button" data-bqop="restaurar">Restaurar o saldo do sistema</button>` : ""}</div>`}
+    </article>`; }).join("")}</div>`);
+  box.innerHTML = partes.join("");
+}
 async function apDecidir(op, ids, motivo){
   const lst = ids.map(id => (S.contagens||[]).find(c => c.id === id)).filter(Boolean).map(c => ({id:c.id, versao:c.versao}));
   if (!lst.length || AP.enviando) return;
@@ -3286,7 +3333,17 @@ async function apDecidir(op, ids, motivo){
   finally { AP.enviando = false; S.ocupado = false; renderSync(); renderAprov(); }
 }
 if ($("#t-aprovacoes")) {
-  $("#t-aprovacoes").addEventListener("click", e => {
+  $("#t-aprovacoes").addEventListener("click", async e => {
+    const bq = e.target.closest("[data-bq]");
+    if (bq) {
+      const id = bq.dataset.bq, op = e.target.closest("[data-bqop]");
+      if (op) { AP.lib = {id, op:op.dataset.bqop}; renderAprov(); const t = $(`#bq-mot-${CSS.escape(id)}`); if (t) t.focus(); return; }
+      if (e.target.closest("[data-bqcancel]")) { AP.lib = null; renderAprov(); return; }
+      const cf = e.target.closest("[data-bqconf]");
+      if (cf) { const m = $(`#bq-mot-${CSS.escape(id)}`).value.trim(); if (!m) { toast("Descreva o que foi conferido.", true); return; }
+        const r = await enviar(cf, null, "itemLiberar", {itemId:id, op:cf.dataset.bqconf, motivo:m}); if (r) { AP.lib = null; renderAprov(); } }
+      return;
+    }
     const card = e.target.closest("[data-ap]");
     if (e.target.id === "ap-aprovar-sel") { apDecidir("aprovar", [...AP.sel]); return; }
     const f = e.target.closest("#ap-filtro .chip"); if (f) { AP.filtro = f.dataset.f; renderAprov(); return; }

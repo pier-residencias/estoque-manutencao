@@ -55,7 +55,7 @@ const ABAS = {
       ['contadoEm', 'Contado em'], ['status', 'Situação'], ['versao', 'Versão'], ['decididoPor', 'Decidido por (usuário)'],
       ['decididoPorNome', 'Decidido por'], ['decididoEm', 'Decidido em'], ['motivoDecisao', 'Motivo da decisão'],
       ['qtdFinal', 'Quantidade final'], ['movId', 'Movimentação'], ['operacao', 'Operação'], ['etapa', 'Etapa'],
-      ['extra', 'Dados da importação']
+      ['extra', 'Dados da importação'], ['contadoPorId', 'Contado por (ID da conta)'], ['decididoPorId', 'Decidido por (ID da conta)']
     ],
     num: ['saldoContagem', 'qtdContada', 'diferenca', 'versao', 'qtdFinal']
   },
@@ -211,19 +211,20 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
-const VERSAO = '2026-10-16 inventário com aprovação (homologação)';
+const VERSAO = '2026-10-17 inventário: recuperação automática e integridade (homologação)';
 
 function doGet() {
   return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
 }
 
 function doPost(e) {
-  AUDIT_DET = ''; AUDIT_FEITO = false;
+  AUDIT_DET = ''; AUDIT_FEITO = false; SALDO_OK = {};
   let req;
   try { req = JSON.parse(e.postData.contents); }
   catch (err) { return json({ ok: false, erro: 'Pedido inválido.' }); }
   let conta = null;
   try {
+    garantirIdsUsuarios();
     let token = '';
     if (req.acao === 'entrar' && req.senha !== undefined) {
       // entrada com usuário e senha: confere bloqueio por tentativas, a senha (com hash) e abre uma sessão
@@ -270,10 +271,13 @@ function doPost(e) {
 
     const lock = LockService.getScriptLock();
     if (!lock.tryLock(20000)) throw falha('O sistema está ocupado com outro registro. Tente de novo em alguns segundos.');
-    let msg, extra = {};
+    let msg, extra = {}, terminou = false;
     try {
-      // aprovação de contagem interrompida: termina ou desfaz antes de qualquer outra gravação
-      reconciliarContagens();
+      // aprovação de contagem interrompida: termina ou desfaz antes de qualquer outra gravação;
+      // depois confere se algum saldo mudou fora do sistema (o item fica bloqueado)
+      const rec = reconciliarContagens();
+      conferirImportacaoInterrompida();
+      conferirSaldos(rec.itens, SISTEMA);
       switch (req.acao) {
         case 'registrar': pode('registrar_' + String((req.mov || {}).tipo)); msg = registrar(req.mov || {}, nome, conta); break;
         case 'osAbrir': pode('os_abrir'); msg = osAbrir(req.os || {}, conta); extra.osNumero = msg.numero; extra.osId = msg.id; msg = msg.texto; break;
@@ -289,6 +293,7 @@ function doPost(e) {
         case 'contagemEnviar': msg = contagemEnviar(req, conta); break;
         case 'contagemDecidir': { const d = contagemDecidir(req, conta); msg = d.texto; extra.resultados = d.resultados; break; }
         case 'contagemCancelar': msg = contagemCancelar(req, conta); break;
+        case 'itemLiberar': msg = itemLiberar(req, conta); break;
         case 'devolver': pode('devolver'); msg = devolver(req, nome, conta); break;
         case 'salvarItem': pode((req.item || {}).id ? 'itens_editar' : 'itens_cadastrar'); msg = salvarItem(req, nome, conta); break;
         case 'excluirItem': pode('itens_editar'); msg = excluirItem(req.id, conta); break;
@@ -302,8 +307,12 @@ function doPost(e) {
         default: throw falha('Ação desconhecida.');
       }
       SpreadsheetApp.flush();
+      atualizarRetrato();
+      terminou = true;
       if (!AUDIT_FEITO) auditar(conta, ACOES_AUDIT[req.acao] || req.acao, resumoAuditoria(req, msg));
     } finally {
+      // erro no meio: o retrato só aceita os itens que terminaram certo; o resto é conferido na próxima vez
+      if (!terminou && Object.keys(SALDO_OK).length) { try { atualizarRetrato(SALDO_OK); } catch (e2) {} }
       lock.releaseLock();
     }
     if (extra.pendencias) return json(Object.assign(base, { msg, pendencias: pendLista() }));
@@ -312,7 +321,7 @@ function doPost(e) {
   } catch (err) {
     // tentativas sem permissão ficam no histórico de auditoria
     if (conta && (err.negado || /não tem permissão/i.test(String(err.message)))) auditar(conta, ACOES_AUDIT[req.acao] || String(req.acao || ''), String(err.message), 'Negado');
-    return json({ ok: false, erro: err.paraUsuario ? err.message : 'Erro no servidor: ' + err.message });
+    return json(Object.assign({ ok: false, erro: err.paraUsuario ? err.message : 'Erro no servidor: ' + err.message }, err.codigo ? { codigo: err.codigo } : {}));
   }
 }
 
@@ -348,6 +357,7 @@ function registrar(m, nome, conta) {
   const it = linhas(ti).find(x => x.id === m.itemId);
   if (!it) throw falha('Item não encontrado. Atualize a página.');
   exigirSetor(conta, setorDe(it));
+  exigirItemLivre(it.id, it.nome);
   const atual = Number(it.qtd) || 0;
   const delta = tipo === 'entrada' ? qtd : -qtd;
   if (atual + delta < 0) throw falha('Estoque insuficiente: há ' + fmt(atual) + ' ' + it.unidade + ' de ' + it.nome + '.');
@@ -373,6 +383,7 @@ function registrar(m, nome, conta) {
     });
   }
   gravar(tabela('movs'), mov);
+  SALDO_OK[it.id] = true;
   if (osNum) osRegistrarAndamento(osNum, nome, 'Material: ' + fmt(qtd) + ' ' + it.unidade + ' de ' + it.nome + ' (' + TIPOS[tipo].toLowerCase() + ')');
   return TIPOS[tipo] + (tipo === 'emprestimo' ? ' registrado: ' : ' registrada: ') + fmt(qtd) + ' ' + it.unidade + ' de ' + it.nome + (osNum ? ' · ' + osNum : '') + (nfLinks ? ' · nota fiscal anexada' : '') + '.';
 }
@@ -382,7 +393,7 @@ function devolver(r, nome, conta) {
   const e = linhas(te).find(x => x.id === r.emprestimoId);
   if (!e) throw falha('Este empréstimo já foi encerrado. Atualize a página.');
   const itE = linhas(tabela('itens')).find(x => x.id === e.itemId);
-  if (itE) exigirSetor(conta, setorDe(itE));
+  if (itE) { exigirSetor(conta, setorDe(itE)); exigirItemLivre(itE.id, itE.nome); }
   const estado = texto(r.estado, 40) || 'Em bom estado';
   const perdida = estado.indexOf('Não voltou') === 0;
   const qtd = Number(e.qtd) || 0;
@@ -395,6 +406,7 @@ function devolver(r, nome, conta) {
     destino: e.destino, estadoDevolucao: estado, obs: texto(r.obs, 300), registradoPor: nome, criadoEm: agora(),
     emprestimoId: e.id
   });
+  SALDO_OK[e.itemId] = true;
   te.sh.deleteRow(e._row);
   return perdida ? 'Perda registrada.' : 'Devolução registrada.';
 }
@@ -406,7 +418,7 @@ function salvarItem(r, nome, conta) {
   const nomeItem = texto(v.nome, 120);
   if (!nomeItem) throw falha('Informe o nome do item.');
   const anterior = v.id ? todos.find(x => x.id === v.id) : null;
-  if (anterior) exigirSetor(conta, setorDe(anterior));
+  if (anterior) { exigirSetor(conta, setorDe(anterior)); exigirItemLivre(anterior.id, anterior.nome); }
   const setor = texto(v.setor) ? setorDe({ setor: v.setor }) : (anterior ? setorDe(anterior) : setoresDe(conta)[0]);
   exigirSetor(conta, setor);
   let codigo = texto(v.codigo, 30);
@@ -465,10 +477,12 @@ function excluirItem(id, conta) {
   const it = linhas(ti).find(x => x.id === id);
   if (!it) throw falha('Item não encontrado.');
   exigirSetor(conta, setorDe(it));
+  exigirItemLivre(it.id, it.nome);
   if (arred(Number(it.qtd) || 0) !== 0) throw falha('Só dá para excluir um item com estoque zerado (hoje: ' + fmt(Number(it.qtd) || 0) + ' ' + it.unidade + '). Faça uma contagem com a quantidade real: depois da aprovação, se ficar zerado, o item pode ser excluído.');
   const pend = contagemPendenteDoItem(linhas(tabela('cont')), it.id);
   if (pend) throw falha('Este item tem um ajuste aguardando aprovação (' + pend.numero + '). Decida o ajuste antes de excluir.');
   ti.sh.deleteRow(it._row);
+  SALDO_OK[it.id] = true;
   return 'Item excluído. O histórico continua guardado.';
 }
 
@@ -484,7 +498,7 @@ function estornar(r, nome, conta) {
   const inv = -(Number(m.delta) || 0);
   const ti = tabela('itens');
   const it = linhas(ti).find(x => x.id === m.itemId);
-  if (it) exigirSetor(conta, setorDe(it));
+  if (it) { exigirSetor(conta, setorDe(it)); exigirItemLivre(it.id, it.nome); }
   if (inv !== 0 && it) {
     const novo = arred((Number(it.qtd) || 0) + inv);
     if (novo < 0) throw falha('Não dá para estornar: o estoque ficaria negativo (' + fmt(novo) + ').');
@@ -501,6 +515,7 @@ function estornar(r, nome, conta) {
     const e = linhas(te).find(x => x.id === m.emprestimoId);
     if (e) te.sh.deleteRow(e._row);
   }
+  if (m.itemId) SALDO_OK[m.itemId] = true;
   return 'Lançamento estornado.';
 }
 
@@ -528,6 +543,13 @@ function dados(meses, conta) {
   const cs = contagensVisiveis(conta);
   if (cs) out.contagens = cs;
   out.ajustesPendentes = linhas(tabela('cont')).filter(c => c.status === CONT_STATUS.pendente || c.etapa === 'aplicando').map(c => c.itemId);
+  // itens bloqueados para revisão (saldo alterado fora do sistema ou recuperação sem consistência)
+  const bq = itensBloqueados();
+  out.bloqueios = Object.keys(bq).map(k => bq[k]).filter(b => V.itens.some(i => i.id === b.itemId) || (conta && conta.perfil === PERFIL_TOTAL));
+  if (conta && conta.perfil === PERFIL_TOTAL) {
+    out.integridade = estadoIntegridade();
+    out.adminsAtivos = lerUsuarios().lista.filter(u => u.ativo && u.perfil === PERFIL_TOTAL).length;
+  }
   return Object.assign(out, dadosOsDem(ms, conta, todas, limpa));
 }
 function dadosOsDem(ms, conta, todas, limpa) {
@@ -711,8 +733,51 @@ function autenticar(usuario, senha) {
 }
 function contaDe(us) {
   const perms = lerPerfis()[us.perfil] || {};
-  return { usuario: us.usuario, nome: us.nome || us.usuario, perfil: us.perfil, perms };
+  return { id: us.uid || '', usuario: us.usuario, nome: us.nome || us.usuario, perfil: us.perfil, perms };
 }
+
+// --- identificador fixo de cada conta (coluna "ID da conta" na aba Usuarios) ---
+// Gerado uma vez pelo sistema e nunca reaproveitado: não muda se o login ou o nome mudar, e um login
+// apagado e criado de novo com o mesmo nome recebe outro identificador. É ele que separa quem conta de quem aprova.
+const COL_ID_CONTA = 'ID da conta';
+function novoIdConta() { return 'C-' + Utilities.getUuid().replace(/-/g, '').slice(0, 16).toUpperCase(); }
+function garantirColunaIdConta(U) {
+  if (U.c['ID'] >= 0) return U;
+  U.sh.getRange(1, U.ncol + 1).setValue(COL_ID_CONTA).setFontWeight('bold').setBackground('#1F2A37').setFontColor('#FFFFFF');
+  return lerUsuarios();
+}
+// dá identificador a quem não tem e troca identificadores repetidos (linha copiada à mão na planilha)
+function garantirIdsUsuarios(semBloqueio) {
+  let U = lerUsuarios();
+  const vistos = {};
+  const precisa = U.c['ID'] < 0 || U.lista.some(u => { const dup = !u.uid || vistos[u.uid]; vistos[u.uid] = true; return dup; });
+  if (!precisa) return 0;
+  const lock = semBloqueio ? null : LockService.getScriptLock();
+  if (lock && !lock.tryLock(10000)) return 0; // outra execução está gravando: tenta na próxima
+  try {
+    U = garantirColunaIdConta(lerUsuarios());
+    const usados = {}, trocados = [];
+    let n = 0;
+    U.lista.forEach(u => {
+      if (u.uid && !usados[u.uid]) { usados[u.uid] = true; return; }
+      if (u.uid) trocados.push(u.usuario);
+      let id = novoIdConta();
+      while (usados[id]) id = novoIdConta();
+      usados[id] = true;
+      U.sh.getRange(u.row, U.c['ID'] + 1).setNumberFormat('@').setValue(id);
+      n++;
+    });
+    if (n) auditar({ usuario: 'sistema', nome: 'Sistema', perfil: '' }, 'Identificador das contas', n + ' conta(s) receberam identificador fixo' + (trocados.length ? '; identificador repetido trocado em: ' + trocados.join(', ') : ''));
+    return n;
+  } finally { if (lock) lock.releaseLock(); }
+}
+// mesma pessoa = mesmo identificador fixo; por segurança, o mesmo login também conta como a mesma pessoa
+function mesmaConta(idA, usuarioA, conta) {
+  if (!conta) return false;
+  if (idA && conta.id && idA === conta.id) return true;
+  return !!usuarioA && usuarioA === conta.usuario;
+}
+function contouEsta(c, conta) { return mesmaConta(c.contadoPorId, c.contadoPor, conta); }
 
 function lerUsuarios() {
   const sh = abaUsuarios();
@@ -724,6 +789,7 @@ function lerUsuarios() {
     if (c[label] < 0) throw falha('A coluna "' + label + '" não foi encontrada na aba Usuarios.');
   });
   c['Telefone'] = head.indexOf('Telefone');
+  c['ID'] = head.indexOf(COL_ID_CONTA);
   const lista = [];
   for (let i = 1; i < vals.length; i++) {
     const r = vals[i];
@@ -732,7 +798,8 @@ function lerUsuarios() {
     lista.push({
       row: i + 1, usuario, nome: texto(r[c['Nome']], 60), senha: String(r[c['Senha']]).trim(),
       perfil: String(r[c['Perfil']]).trim(), ativo: String(r[c['Ativo']]).trim().toLowerCase().indexOf('n') !== 0,
-      telefone: c['Telefone'] >= 0 ? String(r[c['Telefone']]).replace(/\D/g, '') : ''
+      telefone: c['Telefone'] >= 0 ? String(r[c['Telefone']]).replace(/\D/g, '') : '',
+      uid: c['ID'] >= 0 ? String(r[c['ID']]).trim() : ''
     });
   }
   return { sh, c, lista, ncol: head.length };
@@ -791,6 +858,7 @@ function salvarUsuario(r, conta) {
     U.sh.getRange(1, U.ncol + 1).setValue('Telefone').setFontWeight('bold').setBackground('#1F2A37').setFontColor('#FFFFFF');
     U = lerUsuarios();
   }
+  U = garantirColunaIdConta(U);
   const outro = U.lista.find(x => x.usuario === usuario && x.usuario !== original);
   if (outro) throw falha('O usuário "' + usuario + '" já existe.');
   const anterior = original ? U.lista.find(x => x.usuario === original) : null;
@@ -806,6 +874,7 @@ function salvarUsuario(r, conta) {
   linha[U.c['Usuário']] = usuario; linha[U.c['Nome']] = nome;
   if (senha) linha[U.c['Senha']] = hashSenha(senha);
   linha[U.c['Perfil']] = perfil; linha[U.c['Ativo']] = ativo ? 'Sim' : 'Não'; linha[U.c['Telefone']] = telefone;
+  if (!original || !(anterior && anterior.uid)) linha[U.c['ID']] = novoIdConta();
   let row;
   if (original) {
     const atual = U.lista.find(x => x.usuario === original);
@@ -1605,6 +1674,7 @@ function importarContagem(r, conta) {
   // A planilha de inventário é uma contagem: atualiza o cadastro (nome, local, mínimo…) na hora,
   // mas nenhum saldo muda aqui. Cada diferença vira uma solicitação para a aprovação da Administração;
   // linhas iguais ao saldo viram Conferência. O histórico antigo da planilha só entra com a aprovação.
+  // Ordem segura: tudo é validado e montado antes; depois cada aba é gravada de uma vez só.
   const entrada = Array.isArray(r.linhas) ? r.linhas : [];
   if (!entrada.length) throw falha('A planilha não tem itens para importar.');
   if (entrada.length > 5000) throw falha('A planilha tem itens demais (máximo 5.000).');
@@ -1615,14 +1685,29 @@ function importarContagem(r, conta) {
   const prefixo = prefixoSetor(setor);
   const ti = tabela('itens');
   const ss = SpreadsheetApp.getActive();
-  if (!conta.perms.itens_cadastrar && entrada.some(l => !l.codigo)) throw falha('Seu perfil não pode cadastrar itens novos.');
+  const props = PropertiesService.getScriptProperties();
+
+  // a mesma planilha enviada de novo: pede confirmação (mesmo confirmada, nada é lançado duas vezes)
+  const digesto = digestoImportacao(setor, r);
+  const ja = props.getProperty('IMPORT_' + digesto);
+  if (ja && !r.confirmarRepeticao) {
+    let x; try { x = JSON.parse(ja); } catch (e) { x = {}; }
+    const e = falha('Esta mesma planilha já foi importada em ' + (x.em || '?') + ' por ' + (x.porNome || '?') + ' (lote ' + (x.lote || '?') + '). ' +
+      'Importar de novo não lança nada em dobro, mas cria outra rodada de conferências. Confirme se quer mesmo enviar outra vez.');
+    e.codigo = 'importacao_repetida'; throw e;
+  }
 
   const n = ti.sh.getLastRow() - 1;
   const vals = n > 0 ? ti.sh.getRange(2, 1, n, ti.ncol).getValues() : [];
   const I = ti.idx;
-  const porCodigo = {};
-  vals.forEach((row, i) => { const c = String(row[I.codigo]).trim().toUpperCase(); if (c && String(row[I.id])) porCodigo[c] = i; });
+  const normNome = x => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const porCodigo = {}, porNome = {};
   const setorDaLinha = row => setorDe({ setor: row[I.setor] });
+  vals.forEach((row, i) => {
+    if (!String(row[I.id])) return;
+    const c = String(row[I.codigo]).trim().toUpperCase(); if (c) porCodigo[c] = i;
+    if (setorDaLinha(row) === setor) { const kn = normNome(row[I.nome]); (porNome[kn] = porNome[kn] || []).push(i); }
+  });
   let maxNum = 0;
   vals.forEach(row => {
     const c = String(row[I.codigo]);
@@ -1636,30 +1721,42 @@ function importarContagem(r, conta) {
   });
 
   // histórico da planilha (compras e retiradas já anotadas lá): guardado na solicitação e lançado só na aprovação,
-  // com a data original e sem repetir o que já está no histórico do sistema
-  const MARCA = 'Histórico da planilha';
-  const normNome = x => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  // com a data original. Linha sem data válida (ou com data futura) fica de fora: data inventada faria o
+  // mesmo lançamento parecer novo numa próxima importação.
+  let histDataRuim = 0;
   const hist = (Array.isArray(r.historico) ? r.historico : []).slice(0, 5000).map(h => ({
-    tipo: h.tipo === 'saida' ? 'saida' : 'entrada', data: dataValida(h.data), nome: texto(h.nome, 160), qtd: numero(h.qtd),
+    tipo: h.tipo === 'saida' ? 'saida' : 'entrada', data: dataHistorica(h.data), nome: texto(h.nome, 160), qtd: numero(h.qtd),
     fornecedor: texto(h.fornecedor, 120), nf: texto(h.nf, 40), valorUnit: h.valorUnit === '' || h.valorUnit == null ? '' : numero(h.valorUnit),
     responsavel: texto(h.responsavel, 80), destino: texto(h.destino, 120), obs: texto(h.obs, 250)
-  })).filter(h => h.nome && h.qtd > 0 && isFinite(h.qtd));
-  const linhaPorNome = {};
-  entrada.forEach((l, k) => { const kn = normNome(l.nome); if (!(kn in linhaPorNome)) linhaPorNome[kn] = k; });
+  })).filter(h => h.nome && h.qtd > 0 && isFinite(h.qtd)).filter(h => { if (h.data) return true; histDataRuim++; return false; });
+  // cada linha do histórico vai para o item de mesmo nome; nome repetido na planilha = ambíguo, fica de fora
+  const linhasPorNome = {};
+  entrada.forEach((l, k) => { const kn = normNome(l.nome); (linhasPorNome[kn] = linhasPorNome[kn] || []).push(k); });
   const histPorLinha = {};
-  let histSemItem = 0;
-  hist.forEach(h => { const k = linhaPorNome[normNome(h.nome)]; if (k === undefined) { histSemItem++; return; } (histPorLinha[k] = histPorLinha[k] || []).push(h); });
+  let histSemItem = 0, histAmbiguo = 0;
+  hist.forEach(h => {
+    const ks = linhasPorNome[normNome(h.nome)];
+    if (!ks) { histSemItem++; return; }
+    if (ks.length > 1) { histAmbiguo++; return; }
+    (histPorLinha[ks[0]] = histPorLinha[ks[0]] || []).push(h);
+  });
   const movsAtuais = linhas(tabela('movs'));
-  const jaLancado = {};
-  if (hist.length) movsAtuais.forEach(m => { if (String(m.obs).indexOf(MARCA) === 0) jaLancado[[m.itemId, m.tipo, m.data, arred(Number(m.qtd))].join('|')] = true; });
-  const histNovo = (k, itemId) => (histPorLinha[k] || []).filter(h => !jaLancado[[itemId, h.tipo, h.data, arred(h.qtd)].join('|')]).map(h => { const c = Object.assign({}, h); delete c.nome; return c; });
+  const lancados = contarLancados(movsAtuais);
+  let histJaNoSistema = 0;
+  const histNovo = (k, itemId) => {
+    const todos = histPorLinha[k] || [];
+    const faltam = histFaltante(itemId, todos, lancados);
+    histJaNoSistema += todos.length - faltam.length;
+    return faltam.map(h => { const c = Object.assign({}, h); delete c.nome; return c; });
+  };
   const dia = hoje();
   const dataAjuste = /^\d{4}-\d{2}-\d{2}$/.test(String(r.dataAjuste || '')) && String(r.dataAjuste) < dia ? String(r.dataAjuste) : dia;
 
   const tc = tabela('cont'), conts = linhas(tc), ult = ultimasMovs(movsAtuais), numeroCT = proximoNumeroContagem(conts);
+  const bloqItens = itensBloqueados();
   const lote = 'L' + Date.now().toString(36).toUpperCase();
-  const usados = {}, novos = [], mantidas = {}, pedidos = [], conferencias = [], bloqueados = [];
-  let criados = 0, atualizadosCad = 0, removidos = 0, histNaFila = 0;
+  const usados = {}, usadosIdx = {}, novos = [], mantidas = {}, pedidos = [], conferencias = [], bloqueados = [];
+  let criados = 0, atualizadosCad = 0, removidos = 0, histNaFila = 0, porNomeAchados = 0;
   const ag = agora();
 
   entrada.forEach((l, k) => {
@@ -1671,29 +1768,40 @@ function importarContagem(r, conta) {
     const chave = codigo.toUpperCase();
     if (chave && usados[chave]) throw falha('O código ' + codigo + ' aparece mais de uma vez na planilha.');
     if (chave) usados[chave] = true;
+    if (!chave && linhasPorNome[normNome(nome)].length > 1) throw falha('O item "' + nome + '" aparece mais de uma vez na planilha sem código. Ponha o código em cada linha (ou junte as linhas) para não contar o mesmo item duas vezes.');
     const campos = {
       nome, categoria: texto(l.categoria, 60), tipoItem: texto(l.tipoItem, 40), unidade: texto(l.unidade, 15),
       local: texto(l.local, 60), obs: texto(l.obs, 300)
     };
     const minimo = l.minimo === '' || l.minimo == null ? null : numero(l.minimo);
-    const i = chave ? porCodigo[chave] : undefined;
+    let i = chave ? porCodigo[chave] : undefined;
+    // sem código: reconhece o item já cadastrado com o mesmo nome no setor (reimportação da mesma planilha)
+    if (i === undefined && !chave) {
+      const mesmos = porNome[normNome(nome)] || [];
+      if (mesmos.length > 1) throw falha('Há ' + mesmos.length + ' itens chamados "' + nome + '" no cadastro. Ponha o código na linha ' + (k + 1) + ' da planilha.');
+      if (mesmos.length === 1) { i = mesmos[0]; porNomeAchados++; }
+    }
     if (i !== undefined && setorDaLinha(vals[i]) !== setor) {
       throw falha('O código ' + codigo + ' já é usado por "' + vals[i][I.nome] + '" no setor ' + setorDaLinha(vals[i]) + '. Mude o código na planilha.');
     }
     if (i !== undefined) {
+      if (usadosIdx[i]) throw falha('O item "' + vals[i][I.nome] + '" aparece mais de uma vez na planilha (linha ' + (k + 1) + ').');
+      usadosIdx[i] = true;
       const row = vals[i];
       mantidas[i] = true;
       Object.keys(campos).forEach(c => { if (campos[c]) row[I[c]] = campos[c]; });
       if (minimo !== null && minimo >= 0) row[I.minimo] = minimo;
       row[I.atualizadoEm] = ag; atualizadosCad++;
       const itx = { id: String(row[I.id]), codigo: String(row[I.codigo]), nome: String(row[I.nome]), unidade: String(row[I.unidade]), qtd: Number(row[I.qtd]) || 0, setor };
-      const hn = histNovo(k, itx.id);
-      if (arred(qtd) === arred(itx.qtd) && !hn.length) { conferencias.push(movConferencia(itx, qtd, conta, 'Importação de inventário: ' + motivo)); return; }
+      if (bloqItens[itx.id]) { bloqueados.push(itx.nome + ' (bloqueado para revisão)'); return; }
       const pend = contagemPendenteDoItem(conts, itx.id);
       if (pend) { bloqueados.push(itx.nome + ' (' + pend.numero + ')'); return; }
+      const hn = histNovo(k, itx.id);
+      if (arred(qtd) === arred(itx.qtd) && !hn.length) { conferencias.push(movConferencia(itx, qtd, conta, 'Importação de inventário: ' + motivo)); return; }
       histNaFila += hn.length;
       pedidos.push(novaSolicitacao(itx, qtd, motivo, conta, { numero: numeroCT, lote, origem: 'Importação', ultimaMov: ult[itx.id] || '', extra: hn.length ? { hist: hn } : null }));
     } else {
+      if (!conta.perms.itens_cadastrar) throw falha('Seu perfil não pode cadastrar itens novos ("' + nome + '").');
       if (!codigo) { maxNum++; codigo = prefixo + ('000' + maxNum).slice(prefixo === 'MAN-' ? -4 : -3); }
       const row = new Array(ti.ncol).fill('');
       const id = novoId('I');
@@ -1720,8 +1828,9 @@ function importarContagem(r, conta) {
       const q = Number(row[I.qtd]) || 0;
       const itx = { id: String(row[I.id]), codigo: String(row[I.codigo]), nome: String(row[I.nome]), unidade: String(row[I.unidade]), qtd: q, setor };
       const pend = contagemPendenteDoItem(conts, itx.id);
-      if (q === 0 && !pend) { removidos++; return; }
+      if (q === 0 && !pend && !bloqItens[itx.id]) { removidos++; return; }
       final.push(row);
+      if (bloqItens[itx.id]) { bloqueados.push(itx.nome + ' (bloqueado para revisão)'); return; }
       if (pend) { bloqueados.push(itx.nome + ' (' + pend.numero + ')'); return; }
       pedidos.push(novaSolicitacao(itx, 0, 'Fora da lista do inventário: ' + motivo, conta, { numero: numeroCT, lote, origem: 'Importação · fora da lista', ultimaMov: ult[itx.id] || '', extra: { remover: true } }));
     });
@@ -1729,39 +1838,84 @@ function importarContagem(r, conta) {
   if (pedidos.length) exigirContagem(conta);
   final = final.concat(novos);
 
-  // cópia de segurança da aba Itens antes de qualquer mudança
+  // a partir daqui, gravações. A marca avisa a verificação automática se o script parar no meio.
+  props.setProperty('IMPORT_ANDAMENTO', JSON.stringify({ lote, setor, por: conta.usuario, porNome: conta.nome, em: agoraSeg() }));
+
+  // cópia de segurança da aba Itens antes de qualquer mudança (protegida contra edição)
   const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd-MM-yyyy HH.mm.ss');
   let nomeCopia = 'Itens (cópia de ' + stamp + ')', k2 = 2;
   while (ss.getSheetByName(nomeCopia)) nomeCopia = 'Itens (cópia de ' + stamp + ' ' + (k2++) + ')';
-  ti.sh.copyTo(ss).setName(nomeCopia).hideSheet();
+  const copia = ti.sh.copyTo(ss).setName(nomeCopia).hideSheet();
+  protegerSoDono(copia, 'Cópia de segurança do Pier Gestão: não editar');
 
-  // grava o cadastro (saldos iguais aos de antes; itens novos com 0) de uma vez só
-  if (n > 0) ti.sh.getRange(2, 1, n, ti.ncol).clearContent();
-  if (final.length) {
-    const fmts = final.map(() => ti.def.cols.reduce((f, c) => { f[ti.idx[c[0]]] = ti.def.num.indexOf(c[0]) >= 0 ? 'General' : '@'; return f; }, new Array(ti.ncol).fill('@')));
-    const rng = ti.sh.getRange(2, 1, final.length, ti.ncol);
+  // grava o cadastro (saldos iguais aos de antes; itens novos com 0) numa única escrita, sem apagar antes:
+  // as linhas que sobram no fim ficam em branco na mesma operação
+  const total = Math.max(n, final.length);
+  if (total > 0) {
+    const vazias = new Array(total - final.length).fill(null).map(() => new Array(ti.ncol).fill(''));
+    const rng = ti.sh.getRange(2, 1, total, ti.ncol);
+    const fmts = final.concat(vazias).map(() => ti.def.cols.reduce((f, c) => { f[ti.idx[c[0]]] = ti.def.num.indexOf(c[0]) >= 0 ? 'General' : '@'; return f; }, new Array(ti.ncol).fill('@')));
     rng.setNumberFormats(fmts);
     rng.setValues(final.map(row => row.map((v, j) => {
       const c = ti.def.cols.find(x => ti.idx[x[0]] === j);
       if (c && ti.def.num.indexOf(c[0]) >= 0) return v === '' ? '' : Number(v);
       return v instanceof Date ? Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') : String(v);
-    })));
+    })).concat(vazias));
   }
+  if (FALHA_SIMULADA === 'import_apos_itens') throw new Error('Falha simulada depois de gravar os itens');
   gravarVarias(tc, pedidos);
+  if (FALHA_SIMULADA === 'import_apos_pedidos') throw new Error('Falha simulada depois das solicitações');
   gravarVarias(tabela('movs'), conferencias);
   pedidos.forEach(c => auditarContagem(conta, 'Contagem enviada para aprovação', c, 'importação de inventário, lote ' + lote));
-  auditar(conta, 'Importou inventário', 'setor ' + setor + '; ' + pedidos.length + ' ajuste(s) para aprovação; ' + conferencias.length + ' conferido(s); ' + criados + ' item(ns) novo(s) com saldo 0; ' + removidos + ' removido(s) com saldo 0; cópia ' + nomeCopia);
+  props.setProperty('IMPORT_' + digesto, JSON.stringify({ lote, em: agora(), porNome: conta.nome }));
+  props.deleteProperty('IMPORT_ANDAMENTO');
+  auditar(conta, 'Importou inventário', 'setor ' + setor + '; lote ' + lote + '; ' + pedidos.length + ' ajuste(s) para aprovação; ' + conferencias.length + ' conferido(s); ' + criados + ' item(ns) novo(s) com saldo 0; ' + removidos + ' removido(s) com saldo 0; ' +
+    histNaFila + ' lançamento(s) do histórico na fila; ' + histJaNoSistema + ' já no sistema; ' + histDataRuim + ' sem data válida; ' + histAmbiguo + ' ambíguo(s); cópia ' + nomeCopia + (r.confirmarRepeticao && ja ? '; reimportação confirmada' : ''));
   AUDIT_FEITO = true;
 
   const partes = [];
   if (pedidos.length) partes.push(pedidos.length + (pedidos.length === 1 ? ' ajuste enviado' : ' ajustes enviados') + ' para a aprovação da Administração');
   if (conferencias.length) partes.push(conferencias.length + ' conferido' + (conferencias.length === 1 ? '' : 's') + ' sem diferença');
   if (criados) partes.push(criados + ' ite' + (criados === 1 ? 'm novo cadastrado' : 'ns novos cadastrados') + ' com estoque 0');
+  if (porNomeAchados) partes.push(porNomeAchados + ' reconhecido' + (porNomeAchados === 1 ? '' : 's') + ' pelo nome (linha sem código)');
   if (removidos) partes.push(removidos + ' saíram do cadastro (já estavam zerados)');
   if (histNaFila) partes.push(histNaFila + ' lançamentos do histórico da planilha aguardando a aprovação');
+  if (histJaNoSistema) partes.push(histJaNoSistema + ' lançamentos do histórico já estavam no sistema (não repetidos)');
   if (histSemItem) partes.push(histSemItem + ' linhas do histórico sem item correspondente (não lançadas)');
-  if (bloqueados.length) partes.push(bloqueados.length + ' com ajuste já pendente, não enviados de novo: ' + bloqueados.slice(0, 5).join(', '));
+  if (histAmbiguo) partes.push(histAmbiguo + ' linhas do histórico com nome de item repetido na planilha (não lançadas)');
+  if (histDataRuim) partes.push(histDataRuim + ' linhas do histórico sem data válida ou com data futura (não lançadas)');
+  if (bloqueados.length) partes.push(bloqueados.length + ' com ajuste pendente ou bloqueados, não enviados de novo: ' + bloqueados.slice(0, 5).join(', '));
   return 'Inventário de ' + setor + ': ' + (partes.join('; ') || 'nada mudou') + '. Nenhum saldo foi alterado. Cópia da lista anterior na aba oculta "' + nomeCopia + '".';
+}
+
+// data de lançamento antigo: só aceita dia que existe no calendário, de 2000 até hoje
+function dataHistorica(s) {
+  const t = String(s || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return '';
+  if (utcParaIso(isoParaUTC(t)) !== t) return '';
+  return t >= '2000-01-01' && t <= hoje() ? t : '';
+}
+// impressão digital da planilha importada (mesmo setor, mesmas linhas e mesmo histórico, qualquer que seja o modo)
+function digestoImportacao(setor, r) {
+  const txt = JSON.stringify([setor, r.linhas || [], r.historico || []]);
+  const d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, txt);
+  return d.map(b => ('0' + (b & 255).toString(16)).slice(-2)).join('').slice(0, 24);
+}
+// quantas vezes cada lançamento (item, tipo, data, quantidade) já existe no histórico do sistema,
+// venha da planilha antiga ou de registro feito no sistema; estornados não contam
+function chaveHist(itemId, tipo, data, qtd) { return [itemId, tipo, String(data).slice(0, 10), arred(Number(qtd))].join('|'); }
+function contarLancados(movs) {
+  const n = {};
+  movs.forEach(m => {
+    if (m.estornado || (m.tipo !== 'entrada' && m.tipo !== 'saida')) return;
+    const k = chaveHist(m.itemId, m.tipo, m.data, m.qtd); n[k] = (n[k] || 0) + 1;
+  });
+  return n;
+}
+// fica só o que ainda falta: 2 compras iguais no mesmo dia na planilha e 1 no sistema = entra 1
+function histFaltante(itemId, hist, lancados) {
+  const vistos = {};
+  return (hist || []).filter(h => { const k = chaveHist(itemId, h.tipo, h.data, h.qtd); vistos[k] = (vistos[k] || 0) + 1; return vistos[k] > (lancados[k] || 0); });
 }
 
 // Rode esta função uma vez pelo editor (Executar) para autorizar o acesso ao Drive das fotos.
@@ -1797,11 +1951,15 @@ function autorizar() {
   tabela('audit');
   tabela('cont');
   const limpeza = garantirLimpeza() + garantirSindico();
+  const ids = garantirIdsUsuarios(true);
+  // primeiro retrato dos saldos: a partir daqui, saldo mudado fora do sistema bloqueia o item
+  if (!lerRetrato()) atualizarRetrato();
   const senhas = migrarSenhas();
   protegerAbas();
   const arquivos = verificarArquivos();
   Logger.log('Pronto: pastas de fotos e de notas fiscais, abas OS, Demandas, Preventivas e Pendencias, setores e permissões verificadas.' + limpeza);
-  Logger.log('Segurança: ' + senhas + ' ' + arquivos);
+  Logger.log('Segurança: ' + senhas + ' ' + arquivos + (ids ? ' ' + ids + ' conta(s) receberam identificador fixo.' : ''));
+  Logger.log('Verificação automática: ' + (ScriptAppTemAcionador() ? 'acionador instalado.' : 'acionador NÃO instalado (rode instalarRecuperacao só na cópia de homologação, ou na oficial com autorização).'));
 }
 
 // ---------- controle de pendências (menu Administração) ----------
@@ -2195,7 +2353,7 @@ function abrirSessao(conta, reg) {
   const agoraMs = Date.now();
   limparSessoesVencidas();
   PropertiesService.getScriptProperties().setProperty(chaveSessao(token), JSON.stringify({
-    u: conta.usuario, c: agoraMs, v: agoraMs, a: texto((reg || {}).aparelho, 60)
+    u: conta.usuario, i: conta.id || '', c: agoraMs, v: agoraMs, a: texto((reg || {}).aparelho, 60)
   }));
   return token;
 }
@@ -2214,7 +2372,8 @@ function contaDaSessao(token) {
   const x = lerSessao(token);
   if (!x) return null;
   const us = lerUsuarios().lista.find(u => u.usuario === x.s.u);
-  if (!us || !us.ativo) { x.props.deleteProperty(x.k); return null; }
+  // login apagado e recriado com o mesmo nome não herda a sessão da conta antiga
+  if (!us || !us.ativo || (x.s.i && us.uid && x.s.i !== us.uid)) { x.props.deleteProperty(x.k); return null; }
   if (Date.now() - x.s.v > 5 * 60e3) { x.s.v = Date.now(); x.props.setProperty(x.k, JSON.stringify(x.s)); }
   const conta = contaDe(us);
   conta.sessao = x.k;
@@ -2279,7 +2438,7 @@ const ACOES_AUDIT = {
   registrar: 'Movimentação', osAbrir: 'Abriu OS', osAtualizar: 'Atualizou OS', osFoto: 'Foto na OS', osFotoRemover: 'Tirou foto da OS',
   demCriar: 'Criou demanda', demAtualizar: 'Atualizou demanda', salvarPreventiva: 'Salvou preventiva', excluirPreventiva: 'Excluiu preventiva',
   salvarLocais: 'Alterou locais', importarContagem: 'Importou inventário', devolver: 'Devolução', salvarItem: 'Salvou item',
-  excluirItem: 'Excluiu item', estornar: 'Estornou lançamento', salvarUsuario: 'Usuário', acessoUsuario: 'Acessos de usuário', contagemEnviar: 'Contagem', contagemDecidir: 'Aprovação de estoque', contagemCancelar: 'Contagem cancelada',
+  excluirItem: 'Excluiu item', estornar: 'Estornou lançamento', salvarUsuario: 'Usuário', acessoUsuario: 'Acessos de usuário', contagemEnviar: 'Contagem', contagemDecidir: 'Aprovação de estoque', contagemCancelar: 'Contagem cancelada', itemLiberar: 'Item liberado',
   salvarPerfil: 'Perfil', excluirPerfil: 'Excluiu perfil', pendSalvar: 'Pendência', pendExcluir: 'Excluiu pendência',
   nfEnviar: 'Enviou nota fiscal', nfVer: 'Abriu nota fiscal', relatorio: 'Dashboard', usuarios: 'Usuários', acessos: 'Histórico de acessos',
   auditoria: 'Auditoria', pendencias: 'Pendências'
@@ -2335,6 +2494,65 @@ function protegerAbas() {
     } catch (e) { Logger.log('Não foi possível proteger a aba ' + k + ': ' + e.message); }
   });
 }
+// protege uma aba inteira: só o dono da planilha (que é quem o sistema usa para gravar) pode editar
+function donoDaPlanilha() { try { return SpreadsheetApp.getActive().getOwner().getEmail(); } catch (e) { return ''; } }
+function protegerSoDono(sh, descricao) {
+  try {
+    const ja = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+    const p = ja.length ? ja[0] : sh.protect();
+    p.setDescription(descricao || 'Gravada pelo Pier Gestão: não editar');
+    if (p.isWarningOnly && p.isWarningOnly()) p.setWarningOnly(false);
+    const dono = donoDaPlanilha();
+    const outros = p.getEditors().filter(u => u.getEmail() && u.getEmail() !== dono);
+    if (outros.length) p.removeEditors(outros);
+    if (p.canDomainEdit()) p.setDomainEdit(false);
+    return '';
+  } catch (e) { let nome = 'aba'; try { nome = sh.getName(); } catch (e2) {} return nome + ': ' + e.message; }
+}
+// Proteção completa (rode pelo editor quando quiser aplicar; não roda sozinha):
+// todas as abas do sistema e as cópias de segurança ficam editáveis só pelo dono da planilha.
+// O site continua gravando normalmente, porque o Apps Script grava como o dono (implantação "Executar como: eu").
+const ABAS_SISTEMA = ['itens', 'movs', 'emp', 'cont', 'audit', 'acessos', 'os', 'dem', 'prev'];
+function protegerPlanilha() {
+  const ss = SpreadsheetApp.getActive();
+  const nomes = ABAS_SISTEMA.map(k => ABAS[k] && ABAS[k].nome).filter(Boolean).concat(['Usuarios', 'Perfis', 'Config', 'Pendencias', 'Pendências']);
+  const feitas = [], erros = [];
+  ss.getSheets().forEach(sh => {
+    const nome = sh.getName();
+    if (nomes.indexOf(nome) < 0 && nome.indexOf('Itens (cópia de') !== 0) return;
+    const e = protegerSoDono(sh, nome.indexOf('Itens (cópia') === 0 ? 'Cópia de segurança do Pier Gestão: não editar' : 'Gravada pelo Pier Gestão: não editar');
+    e ? erros.push(e) : feitas.push(nome);
+  });
+  const txt = feitas.length + ' aba(s) protegida(s): ' + feitas.join(', ') + (erros.length ? '. Erros: ' + erros.join('; ') : '');
+  auditar(SISTEMA, 'Proteção da planilha', txt);
+  Logger.log(txt);
+  Logger.log(verificarProtecao());
+  return txt;
+}
+// Só lê e informa: quem tem acesso à planilha e quais abas estão sem proteção ou só com aviso
+function verificarProtecao() {
+  const ss = SpreadsheetApp.getActive();
+  const dono = donoDaPlanilha();
+  const linhasTxt = ['Dono: ' + (dono || '?')];
+  try {
+    const f = DriveApp.getFileById(ss.getId());
+    const ed = f.getEditors().map(u => u.getEmail()).filter(x => x && x !== dono);
+    const ve = f.getViewers().map(u => u.getEmail()).filter(Boolean);
+    linhasTxt.push('Editores além do dono: ' + (ed.length ? ed.join(', ') : 'nenhum'));
+    linhasTxt.push('Leitores/comentadores: ' + (ve.length ? ve.join(', ') : 'nenhum'));
+    linhasTxt.push('Link aberto: ' + (f.getSharingAccess() === DriveApp.Access.PRIVATE ? 'não' : 'SIM — feche o link'));
+  } catch (e) { linhasTxt.push('Compartilhamento: não foi possível ler (' + e.message + ')'); }
+  ss.getSheets().forEach(sh => {
+    const ps = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+    if (!ps.length) { linhasTxt.push('SEM PROTEÇÃO: ' + sh.getName()); return; }
+    const p = ps[0];
+    if (p.isWarningOnly && p.isWarningOnly()) { linhasTxt.push('SÓ AVISO (não impede): ' + sh.getName()); return; }
+    const outros = p.getEditors().map(u => u.getEmail()).filter(x => x && x !== dono);
+    linhasTxt.push('Protegida: ' + sh.getName() + (outros.length ? ' (também editam: ' + outros.join(', ') + ')' : ' (só o dono)'));
+  });
+  return linhasTxt.join('\n');
+}
+
 // confere quem tem acesso à planilha, às pastas e aos arquivos; tira qualquer link aberto
 function verificarArquivos() {
   const avisos = [];
@@ -2367,7 +2585,8 @@ function verificarArquivos() {
 
 const CONT_STATUS = { pendente: 'Pendente', aprovada: 'Aprovada', rejeitada: 'Rejeitada', reconferir: 'Reconferir', cancelada: 'Cancelada' };
 const CONT_MAX_ITENS = 500;
-var FALHA_SIMULADA = '';   // usado só pelos testes: 'apos_marca', 'apos_historico' ou 'apos_saldo'
+var FALHA_SIMULADA = '';   // usado só pelos testes: 'apos_marca', 'apos_historico', 'apos_saldo', 'import_apos_itens', 'import_apos_pedidos'
+var FALHA_ITEM = '';       // testes: limita a falha simulada da aprovação a um item
 var AUDIT_FEITO = false;   // a ação já gravou a própria auditoria detalhada
 
 function podeContar(conta) { return !!(conta && (conta.perfil === PERFIL_TOTAL || (conta.perms && conta.perms.contagem_registrar))); }
@@ -2399,7 +2618,7 @@ function novaSolicitacao(it, qtd, just, conta, o) {
     id: novoId('CT'), numero: o.numero(), lote: o.lote || '', origem: o.origem || 'Contagem',
     itemId: it.id, itemCodigo: it.codigo, itemNome: it.nome, setor: setorDe(it), unidade: it.unidade,
     saldoContagem: arred(saldo), ultimaMov: o.ultimaMov || '', qtdContada: arred(qtd), diferenca: arred(qtd - saldo),
-    justificativa: texto(just, 300), contadoPor: conta.usuario, contadoPorNome: conta.nome, contadoEm: agoraSeg(),
+    justificativa: texto(just, 300), contadoPor: conta.usuario, contadoPorId: conta.id || '', contadoPorNome: conta.nome, contadoEm: agoraSeg(),
     status: CONT_STATUS.pendente, versao: 1, decididoPor: '', decididoPorNome: '', decididoEm: '', motivoDecisao: '',
     qtdFinal: '', movId: '', operacao: '', etapa: '', extra: o.extra ? JSON.stringify(o.extra) : ''
   };
@@ -2422,7 +2641,7 @@ function movConferencia(it, qtd, conta, obs) {
 function auditarContagem(conta, acao, c, extra, resultado) {
   auditar(conta, acao, [
     c.numero + ' · item ' + c.itemCodigo + ' ' + c.itemNome + ' (' + c.itemId + ')',
-    'contado por ' + c.contadoPorNome + ' (' + c.contadoPor + ') em ' + c.contadoEm,
+    'contado por ' + c.contadoPorNome + ' (' + c.contadoPor + (c.contadoPorId ? ', conta ' + c.contadoPorId : '') + ') em ' + c.contadoEm,
     'saldo na contagem ' + fmt(c.saldoContagem) + ', contado ' + fmt(c.qtdContada) + ', diferença ' + (c.diferenca > 0 ? '+' : '') + fmt(c.diferenca),
     c.justificativa ? 'justificativa: ' + c.justificativa : '', extra || ''
   ].filter(Boolean).join(' · '), resultado);
@@ -2436,7 +2655,7 @@ function contagemEnviar(r, conta) {
   if (!lista.length) throw falha('Informe ao menos um item contado.');
   if (lista.length > CONT_MAX_ITENS) throw falha('Conte no máximo ' + CONT_MAX_ITENS + ' itens por vez.');
   const itens = linhas(tabela('itens')), movs = linhas(tabela('movs')), tc = tabela('cont'), conts = linhas(tc);
-  const ult = ultimasMovs(movs), numero = proximoNumeroContagem(conts);
+  const ult = ultimasMovs(movs), numero = proximoNumeroContagem(conts), bloq = itensBloqueados();
   const lote = lista.length > 1 ? 'L' + Date.now().toString(36).toUpperCase() : '';
   const vistos = {}, sol = [], conf = [], erros = [];
   lista.forEach((l, k) => {
@@ -2444,6 +2663,7 @@ function contagemEnviar(r, conta) {
     if (!it) { erros.push('Linha ' + (k + 1) + ': item não encontrado. Atualize a página.'); return; }
     exigirSetor(conta, setorDe(it));
     if (vistos[it.id]) { erros.push(it.nome + ': aparece duas vezes na contagem.'); return; }
+    if (bloq[it.id]) { erros.push(it.nome + ': item bloqueado para revisão da Administração (' + bloq[it.id].motivo + ')'); return; }
     vistos[it.id] = true;
     const qtd = numero_(l.qtd);
     if (!(qtd >= 0)) { erros.push(it.nome + ': quantidade contada inválida.'); return; }
@@ -2494,12 +2714,12 @@ function contagemDecidir(r, conta) {
       return;
     }
     if (Number(c.versao) !== Number(a.versao)) { resultados.push({ id: c.id, numero: c.numero, ok: false, msg: rot + ': a solicitação mudou. Atualize a tela e confira de novo.' }); return; }
-    if (c.contadoPor === conta.usuario) {
-      auditarContagem(conta, 'Tentou decidir a própria contagem', c, '', 'Negado');
+    if (contouEsta(c, conta)) {
+      auditarContagem(conta, 'Tentou decidir a própria contagem', c, 'conta ' + (conta.id || conta.usuario), 'Negado');
       resultados.push({ id: c.id, numero: c.numero, ok: false, msg: rot + ': quem contou não pode decidir a própria contagem. Outra pessoa da Administração precisa analisar.' });
       return;
     }
-    const base = { decididoPor: conta.usuario, decididoPorNome: conta.nome, decididoEm: agoraSeg(), versao: Number(c.versao) + 1 };
+    const base = { decididoPor: conta.usuario, decididoPorId: conta.id || '', decididoPorNome: conta.nome, decididoEm: agoraSeg(), versao: Number(c.versao) + 1 };
     if (op !== 'aprovar') {
       const st = op === 'rejeitar' ? CONT_STATUS.rejeitada : CONT_STATUS.reconferir;
       gravar(tc, Object.assign(base, { status: st, motivoDecisao: motivo }), c._row);
@@ -2507,6 +2727,8 @@ function contagemDecidir(r, conta) {
       resultados.push({ id: c.id, numero: c.numero, ok: true, msg: rot + ': ' + (op === 'rejeitar' ? 'rejeitado' : 'devolvido para reconferência') + '. O saldo não mudou.' });
       return;
     }
+    const bq = lerBloqueio(c.itemId);
+    if (bq) { resultados.push({ id: c.id, numero: c.numero, ok: false, msg: rot + ': o item está bloqueado para revisão (' + bq.motivo + ') Libere o item antes de decidir.' }); return; }
     // aprovação: o item e o histórico precisam estar como na hora da contagem
     const it = linhas(tabela('itens')).find(x => x.id === c.itemId);
     const ult = ultimasMovs()[c.itemId] || '';
@@ -2536,16 +2758,18 @@ function aplicarAjuste(tc, c, it, conta, base) {
   gravar(tc, Object.assign({}, base, { etapa: 'aplicando', operacao: op, qtdFinal: c.qtdContada }), c._row);
   props.setProperty('CONT_APLICANDO', op);
   SpreadsheetApp.flush();
-  if (FALHA_SIMULADA === 'apos_marca') throw new Error('Falha simulada depois de marcar a operação');
+  const falhar = ponto => FALHA_SIMULADA === ponto && (!FALHA_ITEM || FALHA_ITEM === c.itemId);
+  if (falhar('apos_marca')) throw new Error('Falha simulada depois de marcar a operação');
   const movs = movsDoAjuste(c, it, op, conta);
   gravarVarias(tabela('movs'), movs);
   SpreadsheetApp.flush();
-  if (FALHA_SIMULADA === 'apos_historico') throw new Error('Falha simulada depois do histórico');
+  if (falhar('apos_historico')) throw new Error('Falha simulada depois do histórico');
   aplicarSaldo(c, it);
   SpreadsheetApp.flush();
-  if (FALHA_SIMULADA === 'apos_saldo') throw new Error('Falha simulada depois do saldo');
+  if (falhar('apos_saldo')) throw new Error('Falha simulada depois do saldo');
   concluirContagem(tc, c, movs, conta);
   props.deleteProperty('CONT_APLICANDO');
+  SALDO_OK[c.itemId] = true;
   // confirma a consistência antes de responder
   const conf = linhas(tc).find(x => x.id === c.id);
   const itD = linhas(tabela('itens')).find(x => x.id === c.itemId);
@@ -2560,10 +2784,9 @@ function lerExtra(c) { try { return JSON.parse(c.extra || '{}') || {}; } catch (
 function movsDoAjuste(c, it, op, conta) {
   const extra = lerExtra(c);
   const MARCA = 'Histórico da planilha';
-  const jaLancado = {};
   const hist = Array.isArray(extra.hist) ? extra.hist : [];
-  if (hist.length) linhas(tabela('movs')).forEach(m => { if (String(m.obs).indexOf(MARCA) === 0) jaLancado[[m.itemId, m.tipo, m.data, arred(Number(m.qtd))].join('|')] = true; });
-  const novos = hist.filter(h => !jaLancado[[c.itemId, h.tipo, h.data, arred(h.qtd)].join('|')]);
+  // confere de novo na aprovação: o que entrou no histórico depois da importação não é lançado outra vez
+  const novos = hist.length ? histFaltante(c.itemId, hist, contarLancados(linhas(tabela('movs')))) : [];
   const somaHist = novos.reduce((t, h) => t + (h.tipo === 'entrada' ? h.qtd : -h.qtd), 0);
   const ag = agoraSeg();
   const out = novos.map(h => ({
@@ -2601,26 +2824,28 @@ function concluirContagem(tc, c, movs, conta) {
 }
 
 // Termina ou desfaz uma aprovação interrompida (roda dentro do bloqueio, antes de qualquer gravação)
-function reconciliarContagens() {
+function reconciliarContagens(completo) {
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('CONT_APLICANDO')) return 0;
+  const res = { n: 0, erros: 0, itens: {} };
+  // na gravação comum só procura quando há marca de operação aberta; a rotina agendada procura sempre
+  if (!completo && !props.getProperty('CONT_APLICANDO')) return res;
   const tc = tabela('cont');
-  const sist = { usuario: 'sistema', nome: 'Sistema', perfil: '' };
-  let n = 0;
+  const sist = SISTEMA;
   linhas(tc).filter(c => c.etapa === 'aplicando').forEach(c => {
-    n++;
+    res.n++;
+    res.itens[c.itemId] = true;
     const movs = linhas(tabela('movs')).filter(m => m.operacao && m.operacao === c.operacao);
     const it = linhas(tabela('itens')).find(x => x.id === c.itemId);
     const extra = lerExtra(c);
     const q = it ? arred(Number(it.qtd) || 0) : null;
     const saldoNovo = it ? q === arred(c.qtdFinal) : !!extra.remover;
     const saldoAntigo = it && q === arred(c.saldoContagem);
-    const decisor = { usuario: c.decididoPor, nome: c.decididoPorNome, perfil: PERFIL_TOTAL };
+    const decisor = { id: c.decididoPorId, usuario: c.decididoPor, nome: c.decididoPorNome, perfil: PERFIL_TOTAL };
     if (!movs.length && saldoAntigo) {
       gravar(tc, { etapa: '', operacao: '', qtdFinal: '', decididoPor: '', decididoPorNome: '', decididoEm: '', versao: Number(c.versao) + 1 }, c._row);
       auditarContagem(sist, 'Aprovação interrompida desfeita', c, 'nada tinha sido gravado; voltou para Pendente', 'Recuperado');
     } else if (movs.length && (saldoNovo || saldoAntigo)) {
-      if (!saldoNovo) aplicarSaldo(c, it);
+      if (!saldoNovo || (it && extra.remover && q === 0)) aplicarSaldo(c, it);
       concluirContagem(tc, c, movs, decisor);
       auditarContagem(sist, 'Aprovação interrompida concluída', c, 'histórico já gravado; ' + (saldoNovo ? 'saldo já atualizado' : 'saldo atualizado agora') + '; operação ' + c.operacao, CONT_STATUS.aprovada);
     } else if (!movs.length && saldoNovo) {
@@ -2632,11 +2857,17 @@ function reconciliarContagens() {
       gravar(tc, { status: CONT_STATUS.reconferir, etapa: 'erro', versao: Number(c.versao) + 1,
         motivoDecisao: 'Recuperação: saldo atual ' + (q === null ? 'sem item' : fmt(q)) + ' não bate com a contagem nem com o aprovado. Confira o item e o histórico.' }, c._row);
       auditarContagem(sist, 'Inconsistência na recuperação', c, 'operação ' + c.operacao + '; movimentações gravadas: ' + movs.length + '; saldo atual ' + (q === null ? 'sem item' : fmt(q)), 'Erro');
+      res.erros++;
+      delete res.itens[c.itemId];
+      // não dá para saber qual saldo está certo: o item fica travado até a Administração revisar
+      bloquearItem({ itemId: c.itemId, itemCodigo: c.itemCodigo, itemNome: c.itemNome, tipo: 'recuperacao', contagem: c.numero, operacao: c.operacao,
+        saldoPlanilha: q === null ? undefined : q,
+        motivo: 'a aprovação ' + c.numero + ' parou no meio e o saldo (' + (q === null ? 'item apagado' : fmt(q)) + ') não bate nem com o saldo da contagem (' + fmt(c.saldoContagem) + ') nem com o aprovado (' + fmt(c.qtdFinal) + ').' });
     }
   });
   SpreadsheetApp.flush();
   props.deleteProperty('CONT_APLICANDO');
-  return n;
+  return res;
 }
 
 // quem enviou cancela a própria solicitação enquanto está pendente
@@ -2644,10 +2875,10 @@ function contagemCancelar(r, conta) {
   const tc = tabela('cont');
   const c = linhas(tc).find(x => x.id === String(r.id || ''));
   if (!c) throw falha('Solicitação não encontrada.');
-  if (c.contadoPor !== conta.usuario) { const e = falha('Só quem enviou a contagem pode cancelar.'); e.negado = true; throw e; }
+  if (!contouEsta(c, conta)) { const e = falha('Só quem enviou a contagem pode cancelar.'); e.negado = true; throw e; }
   if (c.status !== CONT_STATUS.pendente || c.etapa) throw falha('Esta solicitação já foi ' + c.status.toLowerCase() + '.');
   if (Number(c.versao) !== Number(r.versao)) throw falha('A solicitação mudou. Atualize a tela.');
-  gravar(tc, { status: CONT_STATUS.cancelada, decididoPor: conta.usuario, decididoPorNome: conta.nome, decididoEm: agoraSeg(), motivoDecisao: 'Cancelada por quem contou', versao: Number(c.versao) + 1 }, c._row);
+  gravar(tc, { status: CONT_STATUS.cancelada, decididoPor: conta.usuario, decididoPorId: conta.id || '', decididoPorNome: conta.nome, decididoEm: agoraSeg(), motivoDecisao: 'Cancelada por quem contou', versao: Number(c.versao) + 1 }, c._row);
   auditarContagem(conta, 'Contagem cancelada', c, '', CONT_STATUS.cancelada);
   return c.numero + ' cancelada. O saldo não mudou.';
 }
@@ -2659,13 +2890,239 @@ function contagensVisiveis(conta) {
   const admin = conta.perfil === PERFIL_TOTAL;
   return linhas(tabela('cont'))
     .filter(c => c.status === CONT_STATUS.pendente || c.etapa === 'aplicando' || String(c.contadoEm).slice(0, 10) >= corte)
-    .filter(c => admin || c.contadoPor === conta.usuario)
+    .filter(c => admin || contouEsta(c, conta))
     .map(c => {
       const ex = lerExtra(c);
       const o = Object.assign({}, c); delete o._row; delete o.extra; delete o.operacao;
+      o.minha = contouEsta(c, conta); delete o.contadoPorId; delete o.decididoPorId;
       o.historico = Array.isArray(ex.hist) ? ex.hist.length : 0; o.remover = !!ex.remover; o.novo = !!ex.novo;
       return o;
     });
+}
+
+// ---------- integridade: recuperação automática, bloqueio de itens e conferência dos saldos ----------
+// 1) recuperarOperacoesPendentes() roda sozinha por um acionador de tempo (instalado à mão, só na cópia de
+//    homologação até haver autorização) e também antes de cada gravação: termina ou desfaz aprovações
+//    interrompidas, sempre pelo identificador da operação, sem aplicar nada duas vezes.
+// 2) O sistema guarda (nas propriedades do script, fora da planilha) o último saldo que ele mesmo gravou
+//    em cada item. Saldo diferente disso = alteração fora do sistema (edição direta na planilha) ou gravação
+//    que parou no meio: o item fica bloqueado até a Administração revisar.
+const SISTEMA = { id: '', usuario: 'sistema', nome: 'Sistema', perfil: '' };
+const PLANILHA_OFICIAL = '15wnsofNNPt8E5HydcJaFfmQpDGAtyF45ErcwkIHhlm8';
+const RECUP = { minutos: 10, esperaLockMs: 30000, pedaco: 8000 };
+var SALDO_OK = {};   // itens cujo saldo esta execução gravou de forma completa (movimentação + saldo)
+
+// --- bloqueio de itens (uma propriedade por item: BLOQ_<id>) ---
+function chaveBloqueio(id) { return 'BLOQ_' + String(id).slice(0, 60); }
+function lerBloqueio(id) {
+  if (!id) return null;
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(chaveBloqueio(id)) || 'null'); } catch (e) { return null; }
+}
+function itensBloqueados() {
+  const all = PropertiesService.getScriptProperties().getProperties(), out = {};
+  Object.keys(all).forEach(k => { if (k.indexOf('BLOQ_') === 0) { try { const b = JSON.parse(all[k]); if (b && b.itemId) out[b.itemId] = b; } catch (e) {} } });
+  return out;
+}
+function bloquearItem(info, conta) {
+  if (lerBloqueio(info.itemId)) return false; // já bloqueado: mantém o primeiro registro
+  const b = Object.assign({ desde: agoraSeg() }, info);
+  b.motivo = texto(b.motivo, 300);
+  PropertiesService.getScriptProperties().setProperty(chaveBloqueio(b.itemId), JSON.stringify(b));
+  auditar(conta || SISTEMA, 'Item bloqueado', [b.itemCodigo, b.itemNome, '(' + b.itemId + ')', '·', b.motivo,
+    b.saldoSistema !== undefined ? '· saldo do sistema ' + fmt(b.saldoSistema) : '', b.saldoPlanilha !== undefined ? '· saldo na planilha ' + fmt(b.saldoPlanilha) : '']
+    .filter(Boolean).join(' '), 'Bloqueado');
+  return true;
+}
+function exigirItemLivre(id, nomeItem) {
+  const b = lerBloqueio(id);
+  if (b) throw falha('O item ' + (nomeItem || b.itemNome || '') + ' está bloqueado para alterações: ' + b.motivo + ' A Administração precisa revisar e liberar o item.');
+}
+
+// --- retrato dos saldos gravados pelo sistema (propriedades SALDOS_0, SALDOS_1… em pedaços de 8 mil caracteres) ---
+function lerRetrato() {
+  const p = PropertiesService.getScriptProperties();
+  const n = Number(p.getProperty('SALDOS_N') || 0);
+  if (!n) return null;
+  let txt = '';
+  for (let i = 0; i < n; i++) txt += p.getProperty('SALDOS_' + i) || '';
+  try { return JSON.parse(txt); } catch (e) { return null; }
+}
+function gravarRetrato(mapa) {
+  const p = PropertiesService.getScriptProperties();
+  const txt = JSON.stringify(mapa);
+  const antes = Number(p.getProperty('SALDOS_N') || 0);
+  const partes = [];
+  for (let i = 0; i < txt.length; i += RECUP.pedaco) partes.push(txt.slice(i, i + RECUP.pedaco));
+  if (!partes.length) partes.push('{}');
+  partes.forEach((x, i) => { if (p.getProperty('SALDOS_' + i) !== x) p.setProperty('SALDOS_' + i, x); });
+  for (let i = partes.length; i < antes; i++) p.deleteProperty('SALDOS_' + i);
+  if (antes !== partes.length) p.setProperty('SALDOS_N', String(partes.length));
+}
+function saldosAtuais() {
+  const out = {};
+  linhas(tabela('itens')).forEach(it => { out[it.id] = { q: arred(Number(it.qtd) || 0), codigo: it.codigo, nome: it.nome }; });
+  return out;
+}
+// compara a planilha com o retrato: diferença = item bloqueado. "ignorar" = itens que a recuperação acabou de acertar.
+function conferirSaldos(ignorar, conta) {
+  const atual = saldosAtuais();
+  const ret = lerRetrato();
+  const mapa = {};
+  Object.keys(atual).forEach(id => { mapa[id] = atual[id].q; });
+  if (!ret) { gravarRetrato(mapa); return { bloqueados: [], removidos: [], inicial: true }; }
+  const bloq = itensBloqueados(), novos = [], removidos = [];
+  Object.keys(atual).forEach(id => {
+    if ((ignorar && ignorar[id]) || bloq[id]) return;
+    const antes = id in ret ? arred(Number(ret[id]) || 0) : 0, agora = atual[id].q;
+    if (antes === agora) return;
+    const fora = !(id in ret);
+    bloquearItem({ itemId: id, itemCodigo: atual[id].codigo, itemNome: atual[id].nome, tipo: 'saldo_externo', saldoSistema: antes, saldoPlanilha: agora,
+      motivo: fora ? 'o item apareceu na planilha com saldo ' + fmt(agora) + ' sem ter sido cadastrado pelo sistema.'
+        : 'o saldo mudou de ' + fmt(antes) + ' para ' + fmt(agora) + ' fora do sistema (edição direta na planilha ou gravação interrompida).' }, conta);
+    novos.push(id);
+  });
+  Object.keys(ret).forEach(id => {
+    if (id in atual || arred(Number(ret[id]) || 0) === 0) return;
+    removidos.push(id);
+    auditar(conta || SISTEMA, 'Item sumiu da planilha', 'o item ' + id + ' tinha saldo ' + fmt(ret[id]) + ' e foi apagado fora do sistema. Confira a aba Itens e a cópia de segurança.', 'Alerta');
+  });
+  if (JSON.stringify(mapa) !== JSON.stringify(ret)) gravarRetrato(mapa);
+  if (removidos.length) registrarAlerta('Itens apagados direto na planilha: ' + removidos.join(', ') + '.');
+  return { bloqueados: novos, removidos };
+}
+// depois de uma gravação: o retrato passa a ser o saldo atual (todos os itens, ou só os que terminaram certo)
+function atualizarRetrato(soEstes) {
+  const atual = saldosAtuais();
+  let mapa = {};
+  if (soEstes) {
+    mapa = lerRetrato() || {};
+    Object.keys(soEstes).forEach(id => { if (id in atual) mapa[id] = atual[id].q; else delete mapa[id]; });
+  } else Object.keys(atual).forEach(id => { mapa[id] = atual[id].q; });
+  gravarRetrato(mapa);
+}
+
+// --- situação da verificação automática (mostrada para a Administração) ---
+function registrarAlerta(txt) {
+  const p = PropertiesService.getScriptProperties();
+  let a; try { a = JSON.parse(p.getProperty('RECUP_ALERTAS') || '[]'); } catch (e) { a = []; }
+  a.unshift({ em: agoraSeg(), txt: texto(txt, 300) });
+  p.setProperty('RECUP_ALERTAS', JSON.stringify(a.slice(0, 10)));
+}
+function estadoIntegridade() {
+  const p = PropertiesService.getScriptProperties();
+  let est = null, alertas = [];
+  try { est = JSON.parse(p.getProperty('RECUP_ESTADO') || 'null'); } catch (e) {}
+  try { alertas = JSON.parse(p.getProperty('RECUP_ALERTAS') || '[]'); } catch (e) {}
+  return { ultima: est, alertas };
+}
+
+// --- importação interrompida: a marca IMPORT_ANDAMENTO só fica se o script parou no meio ---
+function conferirImportacaoInterrompida() {
+  const p = PropertiesService.getScriptProperties();
+  const raw = p.getProperty('IMPORT_ANDAMENTO');
+  if (!raw) return null;
+  let x; try { x = JSON.parse(raw); } catch (e) { x = {}; }
+  const txt = 'A importação do lote ' + (x.lote || '?') + ' (' + (x.setor || '') + ', ' + (x.porNome || x.por || '') + ', ' + (x.em || '') + ') parou no meio. ' +
+    'Nenhum saldo muda na importação; importe a mesma planilha de novo: itens já criados são reconhecidos e o histórico não se repete.';
+  auditar(SISTEMA, 'Importação interrompida', txt, 'Alerta');
+  registrarAlerta(txt);
+  p.deleteProperty('IMPORT_ANDAMENTO');
+  return x;
+}
+
+// Rotina agendada (acionador de tempo). Nunca roda junto com uma gravação: espera o mesmo bloqueio do doPost.
+function recuperarOperacoesPendentes() {
+  const p = PropertiesService.getScriptProperties();
+  const lock = LockService.getScriptLock();
+  const inicio = agoraSeg();
+  if (!lock.tryLock(RECUP.esperaLockMs)) {
+    p.setProperty('RECUP_ESTADO', JSON.stringify({ em: inicio, resultado: 'ocupado', txt: 'Sistema ocupado com outra gravação; tenta de novo na próxima rodada.' }));
+    return 'ocupado';
+  }
+  AUDIT_DET = ''; AUDIT_FEITO = false; SALDO_OK = {};
+  let est;
+  try {
+    const rec = reconciliarContagens(true);
+    const imp = conferirImportacaoInterrompida();
+    const sal = conferirSaldos(rec.itens, SISTEMA);
+    SpreadsheetApp.flush();
+    const bloq = Object.keys(itensBloqueados()).length;
+    const partes = [];
+    if (rec.n) partes.push(rec.n + ' aprovação(ões) interrompida(s) tratada(s)' + (rec.erros ? ', ' + rec.erros + ' com inconsistência' : ''));
+    if (sal.bloqueados.length) partes.push(sal.bloqueados.length + ' item(ns) com saldo alterado fora do sistema');
+    if (sal.removidos.length) partes.push(sal.removidos.length + ' item(ns) apagado(s) fora do sistema');
+    if (imp) partes.push('importação interrompida (lote ' + (imp.lote || '?') + ')');
+    const problema = rec.erros || sal.bloqueados.length || sal.removidos.length || imp;
+    est = { em: inicio, resultado: problema ? 'atencao' : rec.n ? 'corrigido' : 'ok', bloqueados: bloq,
+      txt: partes.length ? partes.join('; ') + '.' : 'Nenhuma operação pendente; saldos conferidos.' };
+    if (partes.length) auditar(SISTEMA, 'Verificação automática', est.txt, problema ? 'Alerta' : 'Recuperado');
+  } catch (e) {
+    est = { em: inicio, resultado: 'erro', txt: 'Erro na verificação: ' + texto(e.message, 200) };
+    auditar(SISTEMA, 'Verificação automática', est.txt, 'Erro');
+  } finally {
+    p.setProperty('RECUP_ESTADO', JSON.stringify(est));
+    lock.releaseLock();
+  }
+  return est.resultado + ': ' + est.txt;
+}
+
+// Administração revisa e libera um item bloqueado
+function itemLiberar(r, conta) {
+  exigirAdministracao(conta);
+  const id = String(r.itemId || '');
+  const b = lerBloqueio(id);
+  if (!b) throw falha('Este item não está bloqueado. Atualize a tela.');
+  const motivo = texto(r.motivo, 300);
+  if (!motivo) throw falha('Descreva o que foi conferido antes de liberar o item.');
+  const op = r.op === 'restaurar' ? 'restaurar' : 'manter';
+  const ti = tabela('itens');
+  const it = linhas(ti).find(x => x.id === id);
+  const q = it ? arred(Number(it.qtd) || 0) : null;
+  if (it && contagemPendenteDoItem(linhas(tabela('cont')), id) && op === 'restaurar') throw falha('Decida antes o ajuste pendente deste item.');
+  let det = '';
+  if (op === 'restaurar') {
+    if (b.tipo !== 'saldo_externo' || !it) throw falha('Aqui não há um saldo anterior do sistema para restaurar. Use "Manter o saldo atual".');
+    gravar(ti, { qtd: arred(b.saldoSistema), atualizadoEm: agora() }, it._row);
+    det = 'saldo restaurado de ' + fmt(q) + ' para ' + fmt(b.saldoSistema) + ' (valor gravado pelo sistema)';
+  } else if (b.tipo === 'saldo_externo' && it && q !== arred(b.saldoSistema)) {
+    // a diferença feita fora do sistema passa a constar no histórico como Ajuste decidido pela Administração
+    const delta = arred(q - b.saldoSistema);
+    gravar(tabela('movs'), {
+      id: novoId('M'), data: hoje(), tipo: TIPOS.ajuste, itemId: id, itemCodigo: it.codigo, itemNome: it.nome, qtd: Math.abs(delta), unidade: it.unidade, delta,
+      responsavel: conta.nome, motivo: ('Alteração feita fora do sistema mantida pela Administração: ' + motivo).slice(0, 300),
+      obs: ('Saldo do sistema ' + fmt(b.saldoSistema) + ', encontrado ' + fmt(q) + ' em ' + b.desde).slice(0, 300),
+      registradoPor: conta.nome, criadoEm: agoraSeg(), saldoAnterior: b.saldoSistema, saldoFinal: q, aprovadoPor: conta.nome
+    });
+    det = 'saldo ' + fmt(q) + ' mantido; Ajuste de ' + (delta > 0 ? '+' : '') + fmt(delta) + ' registrado no histórico';
+  } else det = it ? 'saldo atual ' + fmt(q) + ' mantido' : 'item não existe mais no cadastro';
+  PropertiesService.getScriptProperties().deleteProperty(chaveBloqueio(id));
+  SALDO_OK[id] = true;
+  auditar(conta, 'Item liberado', (b.itemCodigo || '') + ' ' + (b.itemNome || '') + ' (' + id + ') · bloqueado em ' + b.desde + ': ' + b.motivo + ' · ' + det + ' · conferência: ' + motivo, 'Liberado');
+  AUDIT_FEITO = true;
+  return 'Item liberado: ' + det + '.';
+}
+
+// Instala o acionador de tempo da verificação automática. Rode pelo editor SÓ na cópia de homologação.
+// Na planilha oficial ele se recusa, a menos que a propriedade LIBERAR_ACIONADOR_OFICIAL seja "sim"
+// (definida à mão, depois da autorização para levar a versão à produção).
+function instalarRecuperacao() {
+  if (SpreadsheetApp.getActive().getId() === PLANILHA_OFICIAL && PropertiesService.getScriptProperties().getProperty('LIBERAR_ACIONADOR_OFICIAL') !== 'sim') {
+    throw new Error('Esta é a planilha oficial do condomínio. O acionador não foi instalado: só com autorização (veja o README).');
+  }
+  removerRecuperacao();
+  ScriptApp.newTrigger('recuperarOperacoesPendentes').timeBased().everyMinutes(RECUP.minutos).create();
+  const r = recuperarOperacoesPendentes();
+  Logger.log('Verificação automática instalada: roda a cada ' + RECUP.minutos + ' minutos. Primeira rodada: ' + r);
+  return r;
+}
+function ScriptAppTemAcionador() {
+  try { return ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'recuperarOperacoesPendentes'); } catch (e) { return false; }
+}
+function removerRecuperacao() {
+  let n = 0;
+  ScriptApp.getProjectTriggers().forEach(t => { if (t.getHandlerFunction() === 'recuperarOperacoesPendentes') { ScriptApp.deleteTrigger(t); n++; } });
+  Logger.log(n ? n + ' acionador(es) da verificação automática removido(s).' : 'Não havia acionador da verificação automática.');
+  return n;
 }
 
 // ---------- histórico de acessos ----------
