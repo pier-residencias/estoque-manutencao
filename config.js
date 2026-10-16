@@ -1,3 +1,5 @@
-// Link do "App da Web" gerado ao implantar o Apps Script da planilha.
-// Termina em /exec. Se fizer uma implantação nova, troque o link abaixo.
-window.ESTOQUE_API_URL = "https://script.google.com/macros/s/AKfycbyL0rDZJ-QcmAAXlwSoCQ0IXQqzBlcWnhjDsARnljOqJVxIBFhgJUrcMSTw5E62XXBG/exec";
+// Branch homologacao: NUNCA usar aqui o link do Apps Script de produção.
+// Cole abaixo o link /exec da implantação da CÓPIA de homologação da planilha.
+// Sem link, o site mostra o aviso "endereço da planilha não configurado" e não grava nada.
+// Ao levar esta branch para a main (só com autorização), mantenha o config.js da main.
+window.ESTOQUE_API_URL = "";

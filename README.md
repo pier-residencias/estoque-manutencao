@@ -87,6 +87,25 @@ O link do Apps Script aberto no navegador mostra a versão do código instalado 
 
 A permissão é **Pendências** (grupo Administração). Na primeira vez que a aba Pendencias é aberta, ela recebe os 74 itens da lista de 13/10/2026 com a situação do relatório de 14/10; isso acontece uma vez só.
 
+## Inventário com aprovação da Administração (branch `homologacao`)
+
+Nenhuma correção de saldo entra sem aprovação. Fluxo:
+
+1. Quem tem a permissão **Registrar contagens** (por padrão a Manutenção; a Limpeza e a Portaria não) abre **Contagem**, digita a quantidade encontrada em cada item e envia.
+2. Quantidade igual ao sistema: vira **Conferência** no Histórico (responsável, data, hora, item e quantidade), sem aprovação e sem mexer no saldo.
+3. Quantidade diferente: exige justificativa e vira uma solicitação **Pendente** na aba **Contagens** (número CT-0001…, saldo no momento da contagem, última movimentação do item, quantidade contada, diferença, justificativa, quem contou e quando). O saldo não muda.
+4. Em **Administração → Aprovações de estoque**, alguém do perfil **Administração** que **não** seja quem contou aprova, rejeita ou devolve para **Reconferir** (com motivo), um por um ou em lote. A quantidade aprovada é sempre a contada.
+5. Na aprovação o servidor confere, dentro do bloqueio que já existe: perfil, quem contou (pelo login), versão da solicitação, saldo atual e última movimentação do item. Se o item mudou depois da contagem, a solicitação vai para Reconferir sem alterar nada. Aprovada, grava um **Ajuste** no Histórico (saldo anterior, saldo final, nº da contagem, quem contou, quem aprovou) e o saldo novo.
+6. Situações: Pendente, Aprovada, Rejeitada, Reconferir, Cancelada (quem contou cancela enquanto está pendente). Decidida, não muda mais.
+
+**Recuperação de falhas.** A aprovação grava em etapas com um identificador de operação: marca a solicitação, grava o histórico, grava o saldo (valor absoluto) e conclui. Se o script parar no meio, a próxima gravação de qualquer pessoa termina a operação (ou desfaz, se nada foi gravado) antes de fazer outra coisa, sem aplicar duas vezes. A resposta só diz "aprovado" depois de conferir saldo e solicitação.
+
+**Caminhos fechados.** Editar um item não muda o estoque (o campo fica travado; a quantidade nova vira solicitação). Item novo nasce com 0 e a quantidade inicial vai para aprovação. **Importar inventário** atualiza só o cadastro (nome, local, categoria, mínimo) e manda as diferenças para aprovação; linhas iguais viram Conferência; itens novos entram com 0; no modo "substituir", itens fora da lista com saldo vão para aprovação de zerar e só saem do cadastro depois de aprovados. O histórico antigo da planilha (compras e retiradas) fica guardado na solicitação e entra com a aprovação, com as datas originais e sem repetir. Ajustes e conferências não podem ser estornados (se houver erro, nova contagem). Só item com estoque 0 pode ser excluído.
+
+**Auditoria.** Cada envio, aprovação, rejeição, reconferência, cancelamento, tentativa negada e recuperação vai para a aba Auditoria com item, solicitação, quem contou, quem decidiu, saldo, contado, diferença, quantidade final, justificativa e resultado.
+
+**Planilha.** Aba nova **Contagens** (criada por `autorizar`). Colunas novas no fim de **Movimentacoes**: Contagem, Operação, Saldo anterior, Saldo final, Aprovado por. Coluna nova em **Perfis**: Registrar contagens. Nada existente é apagado.
+
 ## Segurança
 
 - **Senhas protegidas.** A coluna Senha da aba Usuarios guarda só um código (hash `h1$…` com sal próprio por pessoa, 3.000 rodadas de HMAC-SHA256 e um segredo que fica nas propriedades do script, fora da planilha). A tela de usuários não mostra mais senhas: ao editar, o campo **Nova senha** em branco mantém a atual. Senhas novas têm no mínimo 6 caracteres. Se for preciso redefinir uma senha direto na planilha, basta digitá-la na coluna Senha: ela vale uma vez em texto e vira código na primeira entrada. A função `autorizar` converte todas as senhas antigas.
