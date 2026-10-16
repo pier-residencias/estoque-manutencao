@@ -195,7 +195,7 @@ const TIPO_POR_NOME = Object.keys(TIPOS).reduce((m, k) => { m[TIPOS[k]] = k; ret
 
 // ---------- entrada da web ----------
 
-const VERSAO = '2026-10-15 segurança';
+const VERSAO = '2026-10-15 segurança 2';
 
 function doGet() {
   return json({ ok: true, app: 'Pier Gestão', versao: VERSAO });
@@ -2297,7 +2297,9 @@ function protegerAbas() {
       const sh = tabela(k).sh;
       const ja = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET);
       const p = ja.length ? ja[0] : sh.protect().setDescription('Gravada pelo Pier Gestão: não editar');
-      const outros = p.getEditors().filter(u => u.getEmail() !== Session.getEffectiveUser().getEmail());
+      // o dono vem da própria planilha (Session.getEffectiveUser pediria uma permissão a mais do Google)
+      const dono = (function () { try { return SpreadsheetApp.getActive().getOwner().getEmail(); } catch (e) { return ''; } })();
+      const outros = p.getEditors().filter(u => u.getEmail() && u.getEmail() !== dono);
       if (outros.length) p.removeEditors(outros);
       if (p.canDomainEdit()) p.setDomainEdit(false);
     } catch (e) { Logger.log('Não foi possível proteger a aba ' + k + ': ' + e.message); }
