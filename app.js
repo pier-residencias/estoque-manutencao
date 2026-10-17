@@ -16,7 +16,7 @@ const TIPOS = {
   saida:{nome:"Saída", verbo:"Registrar saída"},
   troca:{nome:"Troca", verbo:"Registrar troca"},
   emprestimo:{nome:"Empréstimo", verbo:"Registrar empréstimo"},
-  devolucao:{nome:"Devolução"}, ajuste:{nome:"Ajuste"}, estorno:{nome:"Estorno"}
+  devolucao:{nome:"Devolução"}, ajuste:{nome:"Ajuste"}, estorno:{nome:"Estorno"}, conferencia:{nome:"Conferência"}
 };
 const pill = t => `<span class="pill p-${esc(t)}">${esc(TIPOS[t]?.nome||t)}</span>`;
 const norm = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
@@ -35,23 +35,27 @@ const SETORES_PERM = [["Manutenção","setor_manutencao"],["Limpeza","setor_limp
 const setoresDasPerms = p => { const l = SETORES_PERM.filter(x => p && p[x[1]]).map(x => x[0]); return l.length ? l : ["Manutenção"]; };
 const doSetor = x => setorDe(x) === S.setor;
 const can = p => !!(S.perms && S.perms[p]);
-const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"], pendencias:["pendencias"], acessos:["acessos"]};
+const ABAS_PERM = {painel:["painel"], demandas:["dem_ver","dem_executar","dem_delegar"], os:["os_ver","os_abrir","os_atender","os_gerenciar"], registrar:["registrar_saida","registrar_entrada","registrar_troca","registrar_emprestimo"], itens:["itens_ver"], historico:["historico_ver"], emprestimos:["devolver","registrar_emprestimo"], dashboard:["dashboard"], usuarios:["usuarios"], pendencias:["pendencias"], acessos:["acessos"], contagem:["contagem_registrar"], aprovacoes:["__perfil_administracao"]};
 // Se o navegador ainda estiver com a página antiga guardada, o menu Administração não existe nela:
 // o resto do sistema continua funcionando normalmente.
 const TEM_ADM = !!(document.getElementById("tab-adm") && document.getElementById("adm-menu") && document.getElementById("t-pendencias"));
 if (!TEM_ADM) delete ABAS_PERM.pendencias;
 if (!TEM_ADM || !document.getElementById("t-acessos")) delete ABAS_PERM.acessos;
+if (!TEM_ADM || !document.getElementById("t-aprovacoes")) delete ABAS_PERM.aprovacoes;
+if (!document.getElementById("t-contagem")) delete ABAS_PERM.contagem;
 // O que aparece depende de como a pessoa entrou: Manutenção (tudo do estoque, OS e demandas),
 // Limpeza (só o estoque da limpeza) ou Administração (só o menu Administração).
-const ABAS_ADM = ["pendencias","usuarios","acessos"];
-const ABAS_LIMPEZA = ["painel","registrar","itens","historico"];
+const ABAS_ADM = ["pendencias","aprovacoes","usuarios","acessos"];
+const ABAS_LIMPEZA = ["painel","registrar","itens","contagem","historico"];
 const TIPOS_LIMPEZA = ["saida","entrada"];
 const modo = () => S.adm ? "Administração" : S.setor;
 const abaNoModo = t => S.adm ? ABAS_ADM.includes(t) : S.setor === "Limpeza" ? ABAS_LIMPEZA.includes(t) : !ABAS_ADM.includes(t);
 const ehSindico = () => norm(S.perfil).includes("sindico");
 const setoresReais = () => SETORES_PERM.filter(x => can(x[1])).map(x => x[0]);
-const podeAdm = () => ABAS_ADM.some(t => (ABAS_PERM[t]||[]).some(can));
-const podeAba = t => (ABAS_PERM[t]||[]).some(can) && abaNoModo(t);
+// aprovações de estoque: só o perfil Administração (o servidor confere de novo)
+const permAba = t => t === "aprovacoes" ? (!!ABAS_PERM.aprovacoes && S.perfil === "Administração") : (ABAS_PERM[t]||[]).some(can);
+const podeAdm = () => ABAS_ADM.some(permAba);
+const podeAba = t => permAba(t) && abaNoModo(t);
 const primeiraAba = () => (S.adm ? ABAS_ADM.find(podeAba) : Object.keys(ABAS_PERM).find(podeAba)) || "painel";
 const movsDoMes = ym => S.movs.filter(m => String(m.data).slice(0,7) === ym && doSetor(m));
 
@@ -84,7 +88,7 @@ async function api(acao, extra){
   }
   if (!r.ok) {
     if ((r.codigo === "senha" || r.codigo === "sessao") && !(acao === "entrar" && extra && extra.senha !== undefined)) { encerrarLocal(r.erro || "Sua sessão terminou. Entre de novo."); }
-    throw {paraUsuario:true, message:r.erro || "Não foi possível concluir."};
+    throw {paraUsuario:true, message:r.erro || "Não foi possível concluir.", codigo:r.codigo || ""};
   }
   if (r.token) { S.token = r.token; guardar(); }
   if (r.perms) { S.perms = r.perms; aplicarPermissoes(); }
@@ -100,6 +104,11 @@ function aplicar(d){
   if (!S.setores.includes(S.setor)) { let salvo = ""; try { salvo = localStorage.getItem("estoque-setor") || ""; } catch(e){} S.setor = S.setores.includes(salvo) ? salvo : S.setores[0]; }
   S.emprestimos = S.empTodos.filter(doSetor);
   S.locais = d.locais || {};
+  S.contagens = d.contagens || [];
+  S.ajPend = new Set(d.ajustesPendentes || []);
+  S.bloq = new Map((d.bloqueios || []).map(b => [b.itemId, b]));
+  S.integridade = d.integridade || null;
+  S.adminsAtivos = d.adminsAtivos;
   renderSetorSel();
   S.movs = d.movs || [];
   S.os = d.os || [];
@@ -224,6 +233,7 @@ function setTab(t){
   if (t==="usuarios") carregarEquipe();
   if (t==="pendencias") carregarPend();
   if (t==="acessos") carregarAcessos();
+  if (t==="contagem" || t==="aprovacoes") atualizar(true);
   window.scrollTo({top:0});
   try{ history.replaceState(null,"","#"+t); }catch(e){}
 }
@@ -411,6 +421,7 @@ function descMov(m){
   if (m.tipo==="entrada") { if (m.fornecedor) p.push(m.fornecedor); if (m.nf) p.push("NF "+m.nf); }
   else if (m.tipo==="devolucao") { p.push("devolvido por "+(m.responsavel||"—")); if (m.estadoDevolucao) p.push(String(m.estadoDevolucao).toLowerCase()); }
   else if (m.tipo==="ajuste") { p.push(m.motivo || "ajuste de inventário"); }
+  else if (m.tipo==="conferencia") { p.push("conferido por " + (m.responsavel||"—")); }
   else if (m.tipo==="estorno") { p.push("correção de lançamento"); if (m.motivo) p.push(m.motivo); }
   else { if (m.os) p.push(m.os); if (m.responsavel) p.push(m.responsavel); if (m.destino) p.push("→ "+m.destino); if (m.tipo==="troca" && m.velhoDestino) p.push("peça velha: "+String(m.velhoDestino).toLowerCase()); }
   if (m.estornado) p.push("estornado");
@@ -496,7 +507,7 @@ function renderItens(){
     <td class="hide-s">${esc(i.local||"—")}</td>
     <td class="n"><b>${fNum(i.qtd)}</b> <span class="muted">${esc(i.unidade||"")}</span></td>
     <td class="n hide-s">${Number(i.minimo)>0?fNum(i.minimo):"—"}</td>
-    <td>${stPill(statusItem(i))}</td>
+    <td>${stPill(statusItem(i))}${S.ajPend && S.ajPend.has(i.id) ? ' <span class="pill st-aberta" title="Contagem com diferença aguardando a Administração">Ajuste pendente</span>' : ""}${S.bloq && S.bloq.has(i.id) ? ` <span class="pill st-bloq" title="${esc(S.bloq.get(i.id).motivo)}">Bloqueado</span>` : ""}</td>
     <td class="n"><button class="btn small" data-item="${esc(i.id)}">${can("itens_editar")?"Editar":"Ver"}</button></td></tr>`).join("")
     : `<tr><td colspan="9"><div class="empty">${carregando ? `<span class="spin" aria-hidden="true"></span> Buscando as movimentações de ${esc(descPer())}…` : pt && all.length ? `Nenhum item ${{cad:"cadastrado", ent:"com entrada", sai:"com saída ou troca", mov:"com movimento"}[pt]} em ${esc(descPer())}.` : all.length ? "Nenhum item com esses filtros." : (S.ultima ? "Nenhum item cadastrado ainda. Cadastre o primeiro em <b>Novo item</b>." : "Carregando os itens da planilha…")}</div></td></tr>`;
 }
@@ -545,15 +556,15 @@ function abrirItem(id, depois){
       <div class="field full"><label for="it-nome">Nome do item <span class="req">*</span></label><input class="input" id="it-nome" value="${esc(v.nome)}" placeholder="Ex.: Lâmpada LED tubular 18W" ${ro}></div>
       <div class="field"><label for="it-cat">Categoria</label><input class="input" id="it-cat" value="${esc(v.categoria)}" list="dl-cat" placeholder="Ex.: Elétrica" ${ro}></div>
       <div class="field"><label for="it-local">Local de guarda</label><input class="input" id="it-local" value="${esc(v.local)}" placeholder="Ex.: Prateleira A3" ${ro}></div>
-      <div class="field"><label for="it-qtd">${novo?"Quantidade atual":"Estoque atual"}</label><input class="input num" id="it-qtd" inputmode="decimal" value="${numTxt(v.qtd)}" placeholder="0" ${ro}></div>
+      ${novo ? `<div class="field"><label for="it-qtd">Quantidade inicial</label><input class="input num" id="it-qtd" inputmode="decimal" value="" placeholder="0" ${ro || (can("contagem_registrar") ? "" : "disabled")}><span class="hint">${can("contagem_registrar") ? "O item é cadastrado com 0. A quantidade vai para a aprovação da Administração." : "O item é cadastrado com estoque 0."}</span></div>`
+        : `${S.bloq && S.bloq.has(it.id) ? `<div class="notice warn full"><b>Item bloqueado para revisão:</b> ${esc(S.bloq.get(it.id).motivo)} Nenhuma alteração é aceita até a Administração liberar.</div>` : ""}<div class="field"><label for="it-qtd">Estoque atual</label><input class="input num" id="it-qtd" value="${numTxt(v.qtd)}" disabled><span class="hint">${S.ajPend && S.ajPend.has(it.id) ? "Há um ajuste deste item aguardando aprovação." : "Para corrigir, faça uma contagem: ela vai para aprovação."}${podeAba("contagem") && !(S.ajPend && S.ajPend.has(it.id)) ? ` <button type="button" class="link" id="it-contar">Contar este item</button>` : ""}</span></div>`}
       <div class="field"><label for="it-un">Unidade</label><select class="input" id="it-un" ${ro}>${unidades.map(u=>`<option ${u===v.unidade?"selected":""}>${esc(u)}</option>`).join("")}</select></div>
       <div class="field"><label for="it-min">Estoque mínimo</label><input class="input num" id="it-min" inputmode="decimal" value="${Number(v.minimo)>0?numTxt(v.minimo):""}" placeholder="Avisa quando ficar abaixo" ${ro}></div>
-      <div class="field" id="it-motivo-box" hidden><label for="it-motivo">Motivo da mudança no estoque <span class="req">*</span></label><input class="input" id="it-motivo" placeholder="Ex.: contagem do inventário"></div>
       <div class="field full"><label for="it-obs">Observação</label><textarea class="input" id="it-obs" ${ro}>${esc(v.obs||"")}</textarea></div>
       <div class="full actions">
         ${edit ? `<button class="btn primary" type="submit" id="it-salvar">${novo?"Cadastrar item":"Salvar alterações"}</button>`:""}
         <button class="btn" type="button" id="it-fechar">${edit?"Cancelar":"Fechar"}</button>
-        ${!novo && edit ? `<button class="btn danger" type="button" id="it-del" style="margin-left:auto">Excluir item</button>`:""}
+        ${!novo && edit ? `<button class="btn danger" type="button" id="it-del" style="margin-left:auto" ${Number(v.qtd) !== 0 ? 'disabled title="Só item com estoque zerado pode ser excluído"' : ""}>Excluir item</button>`:""}
         <span class="hint" id="it-msg"></span>
       </div>
       <div class="full confirm" id="it-conf" hidden>
@@ -564,9 +575,8 @@ function abrirItem(id, depois){
   $("#modal").hidden = false;
   (edit ? $("#it-nome") : $("#it-fechar")).focus();
   $("#it-fechar").onclick = fecharModal;
+  if ($("#it-contar")) $("#it-contar").onclick = () => { fecharModal(); ctIrPara(it.id); };
   if (!novo && edit) {
-    const orig = Number(it.qtd)||0;
-    $("#it-qtd").addEventListener("input", () => { const q = pQtd($("#it-qtd").value); $("#it-motivo-box").hidden = !(Number.isFinite(q) && q !== orig); });
     $("#it-del").onclick = () => { $("#it-conf").hidden = false; };
     $("#it-del-no").onclick = () => { $("#it-conf").hidden = true; };
     $("#it-del-ok").onclick = () => enviar($("#it-del-ok"), $("#it-msg"), "excluirItem", {id:it.id}, fecharModal);
@@ -583,9 +593,9 @@ function abrirItem(id, depois){
     const codigo = $("#it-cod").value.trim();
     const dup = codigo && [...S.itens.values()].find(x => x.codigo===codigo && x.id!==(it&&it.id));
     if (dup) { msg.textContent = `O código ${codigo} já é usado por "${dup.nome}".`; return; }
-    let motivo = "";
-    if (!novo && qtd !== (Number(it.qtd)||0)) { motivo = $("#it-motivo").value.trim(); if (!motivo) { msg.textContent = "Explique o motivo da mudança no estoque."; return; } }
-    const item = { id: it ? it.id : "", codigo, nome, categoria:$("#it-cat").value.trim(), tipoItem:$("#it-tipo").value, unidade:$("#it-un").value, local:$("#it-local").value.trim(), qtd, minimo, obs:$("#it-obs").value.trim(), setor: $("#it-setor") ? $("#it-setor").value : setorDe(v) };
+    const motivo = "";
+    // o saldo de um item existente não muda por aqui (só por contagem aprovada)
+    const item = { id: it ? it.id : "", codigo, nome, categoria:$("#it-cat").value.trim(), tipoItem:$("#it-tipo").value, unidade:$("#it-un").value, local:$("#it-local").value.trim(), qtd: novo ? qtd : (Number(it.qtd)||0), minimo, obs:$("#it-obs").value.trim(), setor: $("#it-setor") ? $("#it-setor").value : setorDe(v) };
     const antes = new Set(S.itens.keys());
     await enviar($("#it-salvar"), msg, "salvarItem", {item, motivo}, () => {
       fecharModal();
@@ -724,7 +734,7 @@ function renderHist(){
   const q = norm($("#h-busca").value);
   const all = movsDoMes(S.histMes).sort(ordMov);
   const list = all.filter(m => {
-    if (S.hTipo && m.tipo!==S.hTipo && !(S.hTipo==="ajuste" && m.tipo==="estorno")) return false;
+    if (S.hTipo && m.tipo!==S.hTipo && !(S.hTipo==="ajuste" && (m.tipo==="estorno" || m.tipo==="conferencia"))) return false;
     if (q && !norm([m.itemNome,m.itemCodigo,m.responsavel,m.destino,m.motivo,m.fornecedor,m.nf,m.obs,m.registradoPor].join(" ")).includes(q)) return false;
     return true;
   });
@@ -743,7 +753,7 @@ function renderHist(){
       <span class="sub">${esc([m.os, m.motivo, m.tipo==="troca"&&m.velhoDestino?"Peça velha: "+m.velhoDestino:"", m.tipo==="emprestimo"&&m.previsao?"Devolver até "+fData(m.previsao):"", m.estadoDevolucao||"", m.obs].filter(Boolean).join(" · "))}</span></td>
     <td class="hide-s">${esc(m.responsavel||"—")}</td>
     <td class="hide-m">${esc(m.registradoPor||"—")}</td>
-    <td class="n">${admin && !m.estornado && m.tipo!=="estorno" ? `<button class="btn small" data-est="${esc(m.id)}">Estornar</button>`:""}</td></tr>`).join("")
+    <td class="n">${admin && !m.estornado && !["estorno","ajuste","conferencia"].includes(m.tipo) ? `<button class="btn small" data-est="${esc(m.id)}">Estornar</button>`:""}</td></tr>`).join("")
     : `<tr><td colspan="8"><div class="empty">${all.length ? "Nada encontrado com esses filtros." : "Nenhuma movimentação registrada em "+nomeMes(S.histMes)+"."}</div></td></tr>`;
 }
 $("#h-mes").value = S.histMes;
@@ -831,6 +841,9 @@ function renderAll(){
   if (S.tab==="os") renderOS();
   if (S.tab==="demandas") renderDem();
   if (S.tab==="pendencias") renderPend();
+  if (S.tab==="contagem") renderContagem();
+  if (S.tab==="aprovacoes") renderAprov();
+  ctBadges(); if (typeof pdBadge === "function") pdBadge();
   renderAvisoDem();
   renderOsRef();
   renderPicked();
@@ -842,6 +855,7 @@ function aplicarPermissoes(){
   if (TEM_ADM) {
     $$("#adm-menu [data-adm-tab]").forEach(b => b.hidden = !podeAba(b.dataset.admTab));
     const g = $('#adm-menu [data-grupo="equipe"]'); if (g) g.hidden = !podeAba("usuarios") && !podeAba("acessos");
+    const ge = $('#adm-menu [data-grupo="estoque"]'); if (ge) ge.hidden = !podeAba("aprovacoes");
     $("#tab-adm").hidden = !ABAS_ADM.some(podeAba);
     if ($("#tab-adm").hidden) abrirMenuAdm(false);
   }
@@ -2443,7 +2457,7 @@ function abrirImportacao(){
       <div class="field full"><label for="imp-arq">Planilha</label><input class="input" type="file" id="imp-arq" accept=".xlsx,.xls,.csv"></div>
       <div class="field full"><label for="imp-mot">Motivo no histórico</label><input class="input" id="imp-mot" value="Inventário ${hojeBR}"></div>
       <div class="full" id="imp-prev"></div>
-      <div class="full actions"><button class="btn primary" type="submit" id="imp-ok" disabled>Importar</button><button class="btn" type="button" id="imp-no">Cancelar</button><span class="hint" id="imp-msg"></span></div>
+      <div class="full actions"><button class="btn primary" type="submit" id="imp-ok" disabled>Enviar para aprovação</button><button class="btn" type="button" id="imp-no">Cancelar</button><span class="hint" id="imp-msg"></span></div>
     </form>`;
   $("#modal").hidden = false;
   $("#imp-no").onclick = fecharModal;
@@ -2464,6 +2478,7 @@ function abrirImportacao(){
     const duvidas = lido.itens.filter(l => /\(\?\)/.test(l.nome));
     $("#imp-prev").innerHTML = `
       <div class="imp-resumo"><span>Aba <b>${esc(lido.aba)}</b>: <b>${lido.itens.length}</b> itens</span><span><b>${novos}</b> novos</span><span><b>${mudam}</b> com quantidade diferente</span><span><b>${iguais}</b> iguais</span>${modo==="substituir"?`<span><b>${saem.length}</b> saem do cadastro</span>`:""}</div>
+      <p class="notice">Nenhum saldo muda agora: as diferenças vão para a aprovação de outra pessoa da Administração e os itens iguais ficam registrados como conferidos. Nome, local, categoria e mínimo são atualizados na hora.</p>
       <fieldset class="perm-g imp-modo"><legend>Itens que já estão no sistema e não aparecem na planilha</legend>
         <label class="perm"><input type="radio" name="imp-modo" value="atualizar" ${modo==="atualizar"?"checked":""}> Manter na lista (só atualizar e acrescentar)</label>
         <label class="perm"><input type="radio" name="imp-modo" value="substituir" ${modo==="substituir"?"checked":""}> Tirar da lista: a planilha passa a ser o cadastro completo</label>
@@ -2473,11 +2488,11 @@ function abrirImportacao(){
         const nomes = new Set(lido.itens.map(l => norm(l.nome).replace(/\s+/g," ").trim()));
         const fora = lido.hist.filter(h => !nomes.has(norm(h.nome).replace(/\s+/g," ").trim())).length;
         const datas = lido.hist.map(h => h.data).sort();
-        return `<label class="perm imp-hist"><input type="checkbox" id="imp-hist" checked> <span><b>Lançar também o histórico da planilha</b> (abas ${esc(lido.histAbas.join(" e "))}): ${ent.length} ${ent.length===1?"compra":"compras"}${sai.length ? ` e ${sai.length} ${sai.length===1?"retirada":"retiradas"}` : ""}, de ${fData(datas[0])} a ${fData(datas[datas.length-1])}, com data, fornecedor e valor. O saldo final de cada item continua igual ao da planilha.${fora ? ` ${fora} ${fora===1?"linha não corresponde":"linhas não correspondem"} a nenhum item e ${fora===1?"fica":"ficam"} de fora.` : ""}</span></label>`;
+        return `<label class="perm imp-hist"><input type="checkbox" id="imp-hist" checked> <span><b>Lançar também o histórico da planilha</b> (abas ${esc(lido.histAbas.join(" e "))}): ${ent.length} ${ent.length===1?"compra":"compras"}${sai.length ? ` e ${sai.length} ${sai.length===1?"retirada":"retiradas"}` : ""}, de ${fData(datas[0])} a ${fData(datas[datas.length-1])}, com data, fornecedor e valor. Esses lançamentos entram no histórico junto com a aprovação de cada item.${fora ? ` ${fora} ${fora===1?"linha não corresponde":"linhas não correspondem"} a nenhum item e ${fora===1?"fica":"ficam"} de fora.` : ""}</span></label>`;
       })() : ""}
       ${semCod ? `<p class="hint">${semCod} itens sem código vão receber um código automático.</p>` : ""}
       ${duvidas.length ? `<p class="hint">${duvidas.length} itens têm "(?)" no nome, marcando leitura duvidosa. Dá para corrigir depois em Itens.</p>` : ""}
-      ${modo==="substituir" && saem.length ? `<p class="notice warn">Vão sair da lista: ${esc(saem.slice(0,12).map(i=>i.nome).join(", "))}${saem.length>12?` e mais ${saem.length-12}`:""}. O histórico deles continua guardado e a planilha guarda uma cópia da lista atual.</p>` : ""}
+      ${modo==="substituir" && saem.length ? `<p class="notice warn">Fora da planilha: ${esc(saem.slice(0,12).map(i=>i.nome).join(", "))}${saem.length>12?` e mais ${saem.length-12}`:""}. Os que estão zerados saem do cadastro; os que ainda têm saldo vão para aprovação de zerar e só saem depois de aprovados. O histórico continua guardado.</p>` : ""}
       ${mud.length ? `<div class="tablebox flat imp-tab"><table><thead><tr><th>Código</th><th>Item</th><th class="n">No sistema</th><th class="n">Contado</th></tr></thead><tbody>${mud.slice(0,40).map(({l,it}) => `<tr><td class="mono">${esc(l.codigo)}</td><td>${esc(it.nome)}</td><td class="n">${fNum(it.qtd)}</td><td class="n"><b>${fNum(l.qtd)}</b></td></tr>`).join("")}</tbody></table></div>` : ""}`;
     $$("input[name=imp-modo]").forEach(r => r.addEventListener("change", prever));
     $("#imp-ok").disabled = false;
@@ -2504,7 +2519,22 @@ function abrirImportacao(){
     const modo = ($("input[name=imp-modo]:checked") || {}).value || "atualizar";
     const comHist = lido.hist && lido.hist.length && $("#imp-hist") && $("#imp-hist").checked;
     const extraHist = comHist ? {historico: lido.hist, dataAjuste: lido.hist.map(h => h.data).sort()[0]} : {};
-    await enviar($("#imp-ok"), $("#imp-msg"), "importarContagem", Object.assign({linhas: lido.itens, modo, motivo: $("#imp-mot").value.trim(), setor: S.setor}, extraHist), () => { fecharModal(); setTab("itens"); });
+    const corpo = Object.assign({linhas: lido.itens, modo, motivo: $("#imp-mot").value.trim(), setor: S.setor}, extraHist);
+    const fim = () => { fecharModal(); setTab("itens"); };
+    const btn = $("#imp-ok"), msg = $("#imp-msg");
+    btn.disabled = true; msg.className = "hint"; msg.innerHTML = `<span class="spin" aria-hidden="true"></span> Enviando…`;
+    try {
+      let r;
+      try { r = await api("importarContagem", corpo); }
+      catch(e){
+        if (e.codigo !== "importacao_repetida") throw e;
+        // mesma planilha já importada: só reenvia se a pessoa confirmar
+        if (!confirm(e.message + "\n\nEnviar mesmo assim?")) { msg.className = "hint err"; msg.textContent = "Importação cancelada: esta planilha já tinha sido enviada."; return; }
+        r = await api("importarContagem", Object.assign({confirmarRepeticao:true}, corpo));
+      }
+      fim(); toast(r.msg || "Importado.");
+    } catch(e){ msg.className = "hint err"; msg.textContent = e.message || "Não foi possível importar."; }
+    finally { btn.disabled = false; }
   });
 }
 $("#i-importar").addEventListener("click", abrirImportacao);
@@ -2903,8 +2933,9 @@ function renderPend(){
 function pdBadge(){
   const b = $("#b-adm"); if (!b) return;
   const n = S.pend && !ehSindico() ? S.pend.filter(pdNova).length : 0;
-  b.textContent = n; b.hidden = !n;
-  b.title = n ? `${n} pendência${n===1?"":"s"} nova${n===1?"":"s"} do síndico` : "";
+  const a = ehAdminTotal() && ABAS_PERM.aprovacoes ? apDecidiveis().length : 0;
+  b.textContent = n + a; b.hidden = !(n + a);
+  b.title = [n ? `${n} pendência${n===1?"":"s"} nova${n===1?"":"s"} do síndico` : "", a ? `${a} ajuste${a===1?"":"s"} de estoque para aprovar` : ""].filter(Boolean).join(" · ");
 }
 // formulário único: incluir pendência, incluir subitem ou editar uma pendência
 function pdAbrirNova(secaoPadrao){ pdAbrirForm({secao:secaoPadrao}); }
@@ -3049,6 +3080,285 @@ $("#pd-mail").addEventListener("click", () => {
   };
   $("#pd-mail-c").focus();
 });
+}
+
+// ---------- contagem de estoque (equipe) e aprovações de estoque (Administração) ----------
+// O saldo só muda com a aprovação de outra pessoa do perfil Administração; contagem igual ao sistema vira Conferência.
+const ehAdminTotal = () => S.perfil === "Administração";
+const CT_ST = {Pendente:"st-aberta", Aprovada:"s-ok", Rejeitada:"s-zero", Reconferir:"s-baixo", Cancelada:"p-ajuste"};
+const ctPill = st => `<span class="pill ${CT_ST[st]||"p-ajuste"}">${esc(st)}</span>`;
+const ctDif = d => { d = Number(d)||0; return d === 0 ? `<span class="ct-dif igual">Igual</span>` : d < 0 ? `<span class="ct-dif falta">Falta ${fNum(-d)}</span>` : `<span class="ct-dif sobra">Sobra ${fNum(d)}</span>`; };
+const ctData = s => s ? `${fData(String(s).slice(0,10))} ${esc(String(s).slice(11,16))}` : "—";
+const CT = {q:"", local:"", cat:"", val:new Map(), msg:"", enviando:false};
+const AP = {sel:new Set(), filtro:"Aprovada", aberto:null, enviando:false, ultimos:[]};
+// "minha" vem do servidor, que compara o identificador fixo da conta (não o nome)
+const ctEhMinha = c => c.minha !== undefined ? !!c.minha : c.contadoPor === S.usuario;
+const ctMinhas = () => (S.contagens||[]).filter(ctEhMinha);
+const apDecidiveis = () => (S.contagens||[]).filter(c => c.status === "Pendente" && !c.etapa && !ctEhMinha(c));
+// contagens devolvidas para reconferir que ainda não tiveram uma contagem nova do mesmo item
+function ctParaRecontar(){
+  const minhas = ctMinhas();
+  return minhas.filter(c => c.status === "Reconferir" && !minhas.some(x => x.itemId === c.itemId && String(x.contadoEm) > String(c.contadoEm)));
+}
+function ctBadges(){
+  const b = $("#b-cont"); if (b) { const n = ctParaRecontar().length; b.textContent = n; b.hidden = !n; b.title = n ? `${n} contage${n===1?"m":"ns"} para refazer` : ""; }
+  const ba = $("#b-aprov"); if (ba) { const n = ehAdminTotal() ? apDecidiveis().length + (S.bloq ? S.bloq.size : 0) : 0; ba.textContent = n; ba.hidden = !n; }
+}
+
+function renderContagem(){
+  if (!$("#t-contagem")) return;
+  const todos = itensArr().slice().sort((a,b) => String(a.nome).localeCompare(String(b.nome),"pt-BR"));
+  const pend = new Map((S.contagens||[]).filter(c => c.status === "Pendente").map(c => [c.itemId, c]));
+  const ajPend = S.ajPend || new Set();
+  // filtros
+  const locais = [...new Set(todos.map(i => i.local).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"));
+  const cats = [...new Set(todos.map(i => i.categoria).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"));
+  const sl = $("#ct-local"), sc = $("#ct-cat");
+  sl.innerHTML = `<option value="">Todos os locais</option>` + locais.map(l => `<option ${l===CT.local?"selected":""}>${esc(l)}</option>`).join("");
+  sc.innerHTML = `<option value="">Todas as categorias</option>` + cats.map(l => `<option ${l===CT.cat?"selected":""}>${esc(l)}</option>`).join("");
+  if (document.activeElement !== $("#ct-busca")) $("#ct-busca").value = CT.q;
+  // avisos do topo
+  const rec = ctParaRecontar();
+  const avisos = [];
+  if (rec.length) avisos.push(`<div class="notice warn"><b>${rec.length === 1 ? "1 item precisa" : rec.length + " itens precisam"} ser contado${rec.length===1?"":"s"} de novo:</b> ${rec.slice(0,6).map(c => `<button type="button" class="link" data-recontar="${esc(c.itemId)}">${esc(c.itemNome)}</button>`).join(", ")}${rec.length>6?" e mais "+(rec.length-6):""}. Veja o motivo em “Minhas contagens”, abaixo.</div>`);
+  if (ehAdminTotal() && !S.adm) { const n = apDecidiveis().length; if (n) avisos.push(`<div class="notice">Há <b>${n}</b> ajuste${n===1?"":"s"} aguardando a sua aprovação. Para aprovar, troque o setor para <b>Administração</b> e abra <b>Aprovações de estoque</b>.</div>`); }
+  if (CT.msg) avisos.push(CT.msg);
+  $("#ct-avisos").innerHTML = avisos.join("");
+  // lista (não refaz enquanto alguém está digitando nela)
+  const digitando = $("#ct-body").contains(document.activeElement);
+  const q = norm(CT.q);
+  const lista = todos.filter(i => (!CT.local || i.local === CT.local) && (!CT.cat || i.categoria === CT.cat) && (!q || norm([i.nome,i.codigo,i.local,i.categoria].join(" ")).includes(q)));
+  if (!digitando) {
+    $("#ct-body").innerHTML = lista.length ? lista.map(i => {
+      const bq = S.bloq && S.bloq.get(i.id);
+      const p = pend.get(i.id) || (ajPend.has(i.id) ? {numero:""} : null) || (bq ? {bloq:bq} : null);
+      const v = CT.val.get(i.id) || {};
+      const mudou = v.qtd !== undefined && v.qtd !== "" && v.saldoVisto !== undefined && Number(v.saldoVisto) !== Number(i.qtd);
+      return `<tr data-ct="${esc(i.id)}" class="${p ? "ct-bloq" : ""}">
+        <td><b>${esc(i.nome)}</b><span class="sub"><span class="mono">${esc(i.codigo||"")}</span>${i.local ? " · " + esc(i.local) : ""}</span></td>
+        <td class="n ct-sis"><span class="ct-lbl">No sistema</span><b>${fNum(i.qtd)}</b> <span class="muted">${esc(i.unidade||"")}</span></td>
+        ${p ? `<td colspan="3">${p.bloq ? `<span class="pill st-bloq" title="${esc(p.bloq.motivo)}">Bloqueado: aguardando revisão da Administração</span>` : `<span class="pill st-aberta">Ajuste aguardando aprovação${p.numero ? " · " + esc(p.numero) : ""}</span>`}</td>` : `
+        <td class="ct-cont"><label class="ct-lbl" for="ctq-${esc(i.id)}">Contei</label><input class="input num ct-q" id="ctq-${esc(i.id)}" inputmode="decimal" autocomplete="off" placeholder="—" value="${esc(v.qtd||"")}" aria-label="Quantidade contada de ${esc(i.nome)}"></td>
+        <td class="ct-res">${ctResultado(i, v, mudou)}</td>
+        <td class="ct-just"><input class="input" id="ctj-${esc(i.id)}" placeholder="Por que está diferente?" value="${esc(v.just||"")}" aria-label="Justificativa da diferença em ${esc(i.nome)}" ${ctPrecisaJust(i, v) ? "" : "hidden"}></td>`}
+      </tr>`;
+    }).join("") : `<tr><td colspan="5"><div class="empty">${todos.length ? "Nenhum item com esses filtros." : "Nenhum item cadastrado neste setor."}</div></td></tr>`;
+  }
+  ctResumo();
+  renderMinhasContagens();
+  ctBadges();
+}
+function ctNum(v){ const t = String(v==null?"":v).trim(); if (t === "") return NaN; return pQtd(t); }
+function ctPrecisaJust(i, v){ const q = ctNum(v.qtd); return Number.isFinite(q) && q >= 0 && q !== Number(i.qtd); }
+function ctResultado(i, v, mudou){
+  if (mudou) return `<span class="ct-dif falta" title="O saldo mudou enquanto você contava">Saldo mudou: confira de novo</span>`;
+  const q = ctNum(v.qtd);
+  if (v.qtd === undefined || v.qtd === "") return `<span class="muted">—</span>`;
+  if (!Number.isFinite(q) || q < 0) return `<span class="ct-dif falta">Número inválido</span>`;
+  return ctDif(q - Number(i.qtd));
+}
+function ctResumo(){
+  const its = [...CT.val.entries()].filter(([id, v]) => v.qtd !== undefined && String(v.qtd).trim() !== "" && S.itens.has(id) && doSetor(S.itens.get(id)));
+  const dif = its.filter(([id, v]) => ctPrecisaJust(S.itens.get(id), v)).length;
+  $("#ct-resumo").innerHTML = its.length ? `<b>${its.length}</b> ${its.length===1?"item contado":"itens contados"} · <b>${its.length - dif}</b> iguais ao sistema · <b>${dif}</b> com diferença` : "Digite a quantidade que você encontrou em cada item. Não precisa contar todos de uma vez.";
+  $("#ct-enviar").disabled = !its.length || CT.enviando;
+  $("#ct-limpar").hidden = !its.length;
+}
+function renderMinhasContagens(){
+  const L = ctMinhas().slice().sort((a,b) => String(b.contadoEm).localeCompare(String(a.contadoEm)));
+  $("#ct-minhas").innerHTML = L.length ? L.slice(0, 60).map(c => `<tr>
+      <td class="mono">${esc(c.numero)}</td>
+      <td><b>${esc(c.itemNome)}</b><span class="sub">${esc(c.origem||"")}</span></td>
+      <td class="n" style="white-space:nowrap">${fNum(c.saldoContagem)} → <b>${fNum(c.qtdContada)}</b><span class="sub">${ctDif(c.diferenca)}</span></td>
+      <td>${ctPill(c.status)}</td>
+      <td class="hide-s num" style="white-space:nowrap">${ctData(c.contadoEm)}</td>
+      <td class="hide-m">${c.motivoDecisao ? esc(c.motivoDecisao) : c.status === "Pendente" ? `<span class="muted">Aguardando a Administração</span>` : "—"}${c.decididoPorNome ? `<span class="sub">${esc(c.decididoPorNome)} · ${ctData(c.decididoEm)}</span>` : ""}</td>
+      <td class="n">${c.status === "Pendente" && !c.etapa ? `<button class="btn small" type="button" data-ctcancel="${esc(c.id)}">Cancelar</button>` : c.status === "Reconferir" ? `<button class="btn small" type="button" data-recontar="${esc(c.itemId)}">Contar de novo</button>` : ""}</td></tr>`).join("")
+    : `<tr><td colspan="7"><div class="empty">Você ainda não enviou contagens com diferença. As conferências sem diferença ficam no Histórico.</div></td></tr>`;
+}
+function ctIrPara(itemId){
+  const it = S.itens.get(itemId); if (!it) return;
+  if (S.tab !== "contagem") setTab("contagem");
+  CT.q = it.codigo || it.nome; CT.local = ""; CT.cat = ""; renderContagem();
+  const i = $(`#ctq-${CSS.escape(itemId)}`); if (i) { i.scrollIntoView({block:"center"}); i.focus(); }
+}
+async function ctEnviar(){
+  const its = [...CT.val.entries()].filter(([id, v]) => v.qtd !== undefined && String(v.qtd).trim() !== "" && S.itens.has(id) && doSetor(S.itens.get(id)));
+  const erros = [], itens = [];
+  its.forEach(([id, v]) => {
+    const i = S.itens.get(id), q = ctNum(v.qtd);
+    if (!Number.isFinite(q) || q < 0) { erros.push(`${i.nome}: quantidade inválida`); return; }
+    if (v.saldoVisto !== undefined && Number(v.saldoVisto) !== Number(i.qtd)) { erros.push(`${i.nome}: o saldo mudou para ${fNum(i.qtd)}, confira e digite de novo`); return; }
+    if (q !== Number(i.qtd) && !String(v.just||"").trim()) { erros.push(`${i.nome}: explique a diferença`); return; }
+    itens.push({itemId:id, qtd:q, saldoVisto:Number(v.saldoVisto ?? i.qtd), justificativa:String(v.just||"").trim()});
+  });
+  if (erros.length) { CT.msg = `<div class="notice crit"><b>Confira antes de enviar:</b> ${esc(erros.slice(0,6).join("; "))}${erros.length>6?"; e mais "+(erros.length-6):""}.</div>`; renderContagem(); $("#ct-avisos").scrollIntoView({block:"nearest"}); return; }
+  CT.enviando = true; ctResumo();
+  const btn = $("#ct-enviar"); btn.innerHTML = `<span class="spin" aria-hidden="true"></span> Enviando…`;
+  S.ocupado = true; renderSync();
+  try {
+    const r = await api("contagemEnviar", {itens});
+    CT.val.clear(); CT.msg = `<div class="notice ok-n">${esc(r.msg)} Acompanhe em “Minhas contagens”.</div>`;
+    toast(r.msg);
+  } catch(e){ CT.msg = `<div class="notice crit">${esc(e.message)}</div>`; }
+  finally { CT.enviando = false; btn.textContent = "Enviar contagem"; S.ocupado = false; renderSync(); renderContagem(); }
+}
+if ($("#t-contagem")) {
+  $("#ct-busca").addEventListener("input", () => { CT.q = $("#ct-busca").value; renderContagem(); });
+  $("#ct-local").addEventListener("change", () => { CT.local = $("#ct-local").value; renderContagem(); });
+  $("#ct-cat").addEventListener("change", () => { CT.cat = $("#ct-cat").value; renderContagem(); });
+  $("#ct-body").addEventListener("input", e => {
+    const tr = e.target.closest("tr[data-ct]"); if (!tr) return;
+    const id = tr.dataset.ct, it = S.itens.get(id); if (!it) return;
+    const v = CT.val.get(id) || {};
+    if (e.target.classList.contains("ct-q")) { v.qtd = e.target.value; v.saldoVisto = Number(it.qtd); }
+    else v.just = e.target.value;
+    CT.val.set(id, v);
+    const j = $(`#ctj-${CSS.escape(id)}`); if (j) j.hidden = !ctPrecisaJust(it, v);
+    const res = tr.querySelector(".ct-res"); if (res) res.innerHTML = ctResultado(it, v, false);
+    ctResumo();
+  });
+  $("#ct-body").addEventListener("keydown", e => {
+    if (e.key !== "Enter" || !e.target.classList.contains("input")) return;
+    e.preventDefault();
+    const campos = $$("#ct-body input:not([hidden])"), k = campos.indexOf(e.target);
+    if (campos[k+1]) campos[k+1].focus();
+  });
+  $("#ct-enviar").addEventListener("click", ctEnviar);
+  $("#ct-limpar").addEventListener("click", () => { CT.val.clear(); CT.msg = ""; renderContagem(); });
+  $("#t-contagem").addEventListener("click", e => {
+    const r = e.target.closest("[data-recontar]"); if (r) { ctIrPara(r.dataset.recontar); return; }
+    const c = e.target.closest("[data-ctcancel]");
+    if (c) { const ct = (S.contagens||[]).find(x => x.id === c.dataset.ctcancel); if (ct) enviar(c, null, "contagemCancelar", {id:ct.id, versao:ct.versao}); }
+  });
+}
+
+// ---------- aprovações de estoque (menu Administração, só perfil Administração) ----------
+function renderAprov(){
+  if (!$("#t-aprovacoes") || !ehAdminTotal()) return;
+  const todas = S.contagens || [];
+  const pend = todas.filter(c => c.status === "Pendente" || c.etapa === "aplicando").sort((a,b) => String(a.contadoEm).localeCompare(String(b.contadoEm)));
+  for (const id of [...AP.sel]) if (!pend.some(c => c.id === id && !ctEhMinha(c))) AP.sel.delete(id);
+  const decid = pend.filter(c => !ctEhMinha(c) && !c.etapa);
+  const minhasP = pend.filter(ctEhMinha).length;
+  renderIntegridade();
+  const recont = todas.filter(c => c.status === "Reconferir").length;
+  $("#ap-stats").innerHTML = `<div class="ap-stat"><b>${decid.length}</b><span>para analisar</span></div>`
+    + (minhasP ? `<div class="ap-stat"><b>${minhasP}</b><span>contadas por você (outra pessoa aprova)</span></div>` : "")
+    + `<div class="ap-stat"><b>${recont}</b><span>em reconferência</span></div>`;
+  $("#ap-ultimos").innerHTML = AP.ultimos.length ? `<div class="notice warn"><b>Resultado da última decisão:</b><ul class="ap-res">${AP.ultimos.map(x => `<li class="${x.ok?"ok":"err"}">${esc(x.msg)}</li>`).join("")}</ul></div>` : "";
+  const nsel = AP.sel.size;
+  $("#ap-bulk").innerHTML = decid.length ? `<label class="ap-todas"><input type="checkbox" id="ap-todas" ${nsel && nsel === decid.length ? "checked" : ""}> Selecionar todas (${decid.length})</label>
+      <button class="btn primary" type="button" id="ap-aprovar-sel" ${nsel && !AP.enviando ? "" : "disabled"}>Aprovar selecionadas${nsel ? " (" + nsel + ")" : ""}</button>
+      <span class="hint">Cada uma é conferida de novo no servidor antes de alterar o saldo.</span>` : "";
+  $("#ap-lista").innerHTML = pend.length ? pend.map(c => {
+    const minha = ctEhMinha(c), atual = S.itens.get(c.itemId);
+    const mudou = atual && Number(atual.qtd) !== Number(c.saldoContagem);
+    const extra = [c.novo ? "Item novo: este é o saldo inicial." : "", c.remover ? "Fora da lista do inventário: ao aprovar, fica com 0 e sai do cadastro." : "", c.historico ? `Inclui ${c.historico} lançamento${c.historico===1?"":"s"} antigo${c.historico===1?"":"s"} da planilha, com as datas originais.` : ""].filter(Boolean);
+    const aberto = AP.aberto && AP.aberto.id === c.id ? AP.aberto.op : "";
+    return `<article class="ap-card ${minha ? "minha" : ""}" data-ap="${esc(c.id)}">
+      <div class="ap-top">
+        ${minha || c.etapa ? "" : `<input type="checkbox" class="ap-sel" aria-label="Selecionar ${esc(c.numero)}" ${AP.sel.has(c.id) ? "checked" : ""}>`}
+        <span class="mono muted">${esc(c.numero)}</span><span class="pill p-ajuste">${esc(c.origem||"Contagem")}</span>${c.etapa ? '<span class="pill st-andamento">Aprovação em andamento</span>' : ""}
+        <span class="ap-quando">${ctData(c.contadoEm)}</span>
+      </div>
+      <h4>${esc(c.itemNome)} <span class="mono muted">${esc(c.itemCodigo||"")}</span><span class="muted"> · ${esc(c.setor||"")}</span></h4>
+      <div class="ap-nums">
+        <div><span>No sistema</span><b>${fNum(c.saldoContagem)}</b> <i>${esc(c.unidade||"")}</i></div>
+        <div><span>Contado</span><b>${fNum(c.qtdContada)}</b> <i>${esc(c.unidade||"")}</i></div>
+        <div><span>Diferença</span>${ctDif(c.diferenca)}</div>
+      </div>
+      <p class="ap-quem">Contado por <b>${esc(c.contadoPorNome)}</b> <span class="mono muted">${esc(c.contadoPor)}</span></p>
+      <p class="ap-just"><span>Justificativa</span>${esc(c.justificativa || "—")}</p>
+      ${extra.length ? `<p class="hint">${esc(extra.join(" "))}</p>` : ""}
+      ${S.bloq && S.bloq.has(c.itemId) ? `<div class="notice warn">Item bloqueado para revisão (veja acima). Libere o item antes de decidir.</div>` : ""}
+      ${mudou ? `<div class="notice warn">O saldo atual é <b>${fNum(atual.qtd)}</b>, diferente do momento da contagem. Ao aprovar, ela vai para Reconferir sem alterar nada.</div>` : ""}
+      ${minha ? `<div class="notice">Contagem sua: outra pessoa da Administração precisa analisar.</div>` : c.etapa ? "" : aberto ? `
+        <div class="ap-motivo"><label for="ap-mot-${esc(c.id)}">${aberto === "rejeitar" ? "Motivo da rejeição" : "O que precisa ser conferido de novo?"} <span class="req">*</span></label>
+          <textarea class="input" id="ap-mot-${esc(c.id)}" rows="2"></textarea>
+          <div class="actions"><button class="btn ${aberto === "rejeitar" ? "danger" : "primary"}" type="button" data-apconf="${aberto}">${aberto === "rejeitar" ? "Confirmar rejeição" : "Devolver para reconferir"}</button><button class="btn" type="button" data-apcancel>Voltar</button></div></div>` : `
+        <div class="actions ap-acoes"><button class="btn primary" type="button" data-apop="aprovar" ${AP.enviando ? "disabled" : ""}>Aprovar</button><button class="btn" type="button" data-apop="reconferir" ${AP.enviando ? "disabled" : ""}>Pedir reconferência</button><button class="btn danger" type="button" data-apop="rejeitar" ${AP.enviando ? "disabled" : ""}>Rejeitar</button></div>`}
+    </article>`;
+  }).join("") : `<div class="empty">Nenhum ajuste aguardando aprovação.</div>`;
+  // histórico de decisões
+  syncChips("#ap-filtro", "f", AP.filtro);
+  const hist = todas.filter(c => c.status !== "Pendente" && c.etapa !== "aplicando" && (!AP.filtro || c.status === AP.filtro)).sort((a,b) => String(b.decididoEm).localeCompare(String(a.decididoEm)));
+  $("#ap-hist").innerHTML = hist.length ? hist.slice(0, 100).map(c => `<tr>
+      <td class="mono">${esc(c.numero)}</td>
+      <td><b>${esc(c.itemNome)}</b><span class="sub mono">${esc(c.itemCodigo||"")}</span></td>
+      <td class="n" style="white-space:nowrap">${fNum(c.saldoContagem)} → <b>${fNum(c.qtdContada)}</b><span class="sub">${ctDif(c.diferenca)}</span></td>
+      <td>${ctPill(c.status)}</td>
+      <td class="hide-s">${esc(c.contadoPorNome)}<span class="sub">${ctData(c.contadoEm)}</span></td>
+      <td class="hide-s">${esc(c.decididoPorNome||"—")}<span class="sub">${ctData(c.decididoEm)}</span></td>
+      <td class="hide-m">${esc(c.motivoDecisao || c.justificativa || "—")}</td></tr>`).join("")
+    : `<tr><td colspan="7"><div class="empty">Nenhuma decisão com esse filtro nos últimos 90 dias.</div></td></tr>`;
+  ctBadges();
+}
+// itens bloqueados, situação da verificação automática e aviso de administradores
+function renderIntegridade(){
+  const box = $("#ap-integ"); if (!box) return;
+  const I = S.integridade || {}, u = I.ultima, partes = [];
+  if (S.adminsAtivos !== undefined && S.adminsAtivos < 2) partes.push(`<div class="notice warn"><b>Só ${S.adminsAtivos === 1 ? "1 login" : "nenhum login"} de Administração ativo.</b> Contagens feitas por ${S.adminsAtivos === 1 ? "ele" : "Administração"} ficam pendentes: a aprovação precisa de outra pessoa, com login individual (não use login compartilhado).</div>`);
+  const rot = {ok:"Tudo certo", corrigido:"Operação interrompida corrigida", atencao:"Precisa de atenção", ocupado:"Sistema ocupado: tenta na próxima rodada", erro:"Erro na verificação"};
+  partes.push(`<p class="ap-verif ${u && (u.resultado === "atencao" || u.resultado === "erro") ? "err" : ""}"><b>Verificação automática:</b> ${u ? `${esc(rot[u.resultado] || u.resultado)} · ${ctData(u.em)} · ${esc(u.txt || "")}` : "ainda não rodou (o acionador de tempo não está instalado nesta planilha)."}</p>`);
+  if (I.alertas && I.alertas.length) partes.push(`<details class="ap-alertas"><summary>Alertas recentes (${I.alertas.length})</summary><ul>${I.alertas.map(a => `<li><span class="muted">${ctData(a.em)}</span> ${esc(a.txt)}</li>`).join("")}</ul></details>`);
+  const bl = S.bloq ? [...S.bloq.values()] : [];
+  if (bl.length) partes.push(`<h3 class="sub-sec">Itens bloqueados para revisão (${bl.length})</h3><div class="ap-lista">${bl.map(b => {
+    const it = S.itens.get(b.itemId), aberto = AP.lib && AP.lib.id === b.itemId ? AP.lib.op : "";
+    const podeRestaurar = b.tipo === "saldo_externo" && it;
+    return `<article class="ap-card bloq" data-bq="${esc(b.itemId)}">
+      <div class="ap-top"><span class="pill st-bloq">${b.tipo === "recuperacao" ? "Recuperação sem consistência" : "Saldo alterado fora do sistema"}</span><span class="ap-quando">desde ${ctData(b.desde)}</span></div>
+      <h4>${esc(b.itemNome || (it && it.nome) || b.itemId)} <span class="mono muted">${esc(b.itemCodigo || "")}</span></h4>
+      ${b.saldoSistema !== undefined || b.saldoPlanilha !== undefined ? `<div class="ap-nums">${b.saldoSistema !== undefined ? `<div><span>Gravado pelo sistema</span><b>${fNum(b.saldoSistema)}</b></div>` : ""}<div><span>Na planilha agora</span><b>${it ? fNum(it.qtd) : "—"}</b></div></div>` : ""}
+      <p class="ap-just"><span>Motivo</span>${esc(b.motivo)}</p>
+      ${aberto ? `<div class="ap-motivo"><label for="bq-mot-${esc(b.itemId)}">O que foi conferido? <span class="req">*</span></label><textarea class="input" id="bq-mot-${esc(b.itemId)}" rows="2"></textarea>
+        <p class="hint">${aberto === "restaurar" ? `O saldo volta para ${fNum(b.saldoSistema)}, o último gravado pelo sistema.` : b.tipo === "saldo_externo" ? "O saldo atual fica e a diferença entra no histórico como Ajuste decidido por você." : "O saldo atual fica. Recomenda-se uma nova contagem do item."}</p>
+        <div class="actions"><button class="btn primary" type="button" data-bqconf="${aberto}">Liberar o item</button><button class="btn" type="button" data-bqcancel>Voltar</button></div></div>`
+      : `<div class="actions ap-acoes"><button class="btn" type="button" data-bqop="manter">Manter o saldo atual</button>${podeRestaurar ? `<button class="btn" type="button" data-bqop="restaurar">Restaurar o saldo do sistema</button>` : ""}</div>`}
+    </article>`; }).join("")}</div>`);
+  box.innerHTML = partes.join("");
+}
+async function apDecidir(op, ids, motivo){
+  const lst = ids.map(id => (S.contagens||[]).find(c => c.id === id)).filter(Boolean).map(c => ({id:c.id, versao:c.versao}));
+  if (!lst.length || AP.enviando) return;
+  AP.enviando = true; renderAprov();
+  S.ocupado = true; renderSync();
+  try {
+    const r = await api("contagemDecidir", {op, itens:lst, motivo: motivo || ""});
+    const res = r.resultados || [];
+    AP.ultimos = res.filter(x => !x.ok).length ? res : [];
+    AP.aberto = null; lst.forEach(x => AP.sel.delete(x.id));
+    toast(r.msg || "Pronto.", res.some(x => !x.ok));
+  } catch(e){ toast(e.message, true); AP.ultimos = [{ok:false, msg:e.message + " Atualize a tela antes de tentar de novo: nada é aplicado duas vezes."}]; }
+  finally { AP.enviando = false; S.ocupado = false; renderSync(); renderAprov(); }
+}
+if ($("#t-aprovacoes")) {
+  $("#t-aprovacoes").addEventListener("click", async e => {
+    const bq = e.target.closest("[data-bq]");
+    if (bq) {
+      const id = bq.dataset.bq, op = e.target.closest("[data-bqop]");
+      if (op) { AP.lib = {id, op:op.dataset.bqop}; renderAprov(); const t = $(`#bq-mot-${CSS.escape(id)}`); if (t) t.focus(); return; }
+      if (e.target.closest("[data-bqcancel]")) { AP.lib = null; renderAprov(); return; }
+      const cf = e.target.closest("[data-bqconf]");
+      if (cf) { const m = $(`#bq-mot-${CSS.escape(id)}`).value.trim(); if (!m) { toast("Descreva o que foi conferido.", true); return; }
+        const r = await enviar(cf, null, "itemLiberar", {itemId:id, op:cf.dataset.bqconf, motivo:m}); if (r) { AP.lib = null; renderAprov(); } }
+      return;
+    }
+    const card = e.target.closest("[data-ap]");
+    if (e.target.id === "ap-aprovar-sel") { apDecidir("aprovar", [...AP.sel]); return; }
+    const f = e.target.closest("#ap-filtro .chip"); if (f) { AP.filtro = f.dataset.f; renderAprov(); return; }
+    if (!card) return;
+    const id = card.dataset.ap;
+    const b = e.target.closest("[data-apop]");
+    if (b) { if (b.dataset.apop === "aprovar") apDecidir("aprovar", [id]); else { AP.aberto = {id, op:b.dataset.apop}; renderAprov(); const t = $(`#ap-mot-${CSS.escape(id)}`); if (t) t.focus(); } return; }
+    if (e.target.closest("[data-apcancel]")) { AP.aberto = null; renderAprov(); return; }
+    const conf = e.target.closest("[data-apconf]");
+    if (conf) { const m = $(`#ap-mot-${CSS.escape(id)}`).value.trim(); if (!m) { toast("Escreva o motivo.", true); return; } apDecidir(conf.dataset.apconf, [id], m); }
+  });
+  $("#t-aprovacoes").addEventListener("change", e => {
+    if (e.target.id === "ap-todas") { const d = apDecidiveis(); AP.sel = new Set(e.target.checked ? d.map(c => c.id) : []); renderAprov(); return; }
+    const s = e.target.closest(".ap-sel"); if (s) { const id = s.closest("[data-ap]").dataset.ap; if (s.checked) AP.sel.add(id); else AP.sel.delete(id); renderAprov(); }
+  });
 }
 
 // ---------- início ----------

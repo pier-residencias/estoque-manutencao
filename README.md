@@ -87,6 +87,53 @@ O link do Apps Script aberto no navegador mostra a versão do código instalado 
 
 A permissão é **Pendências** (grupo Administração). Na primeira vez que a aba Pendencias é aberta, ela recebe os 74 itens da lista de 13/10/2026 com a situação do relatório de 14/10; isso acontece uma vez só.
 
+## Inventário com aprovação da Administração
+
+Nenhuma correção de saldo entra sem aprovação. Fluxo:
+
+1. Quem tem a permissão **Registrar contagens** (por padrão a Manutenção; a Limpeza e a Portaria não) abre **Contagem**, digita a quantidade encontrada em cada item e envia.
+2. Quantidade igual ao sistema: vira **Conferência** no Histórico (responsável, data, hora, item e quantidade), sem aprovação e sem mexer no saldo.
+3. Quantidade diferente: exige justificativa e vira uma solicitação **Pendente** na aba **Contagens** (número CT-0001…, saldo no momento da contagem, última movimentação do item, quantidade contada, diferença, justificativa, quem contou e quando). O saldo não muda.
+4. Em **Administração → Aprovações de estoque**, alguém do perfil **Administração** que **não** seja quem contou aprova, rejeita ou devolve para **Reconferir** (com motivo), um por um ou em lote. A quantidade aprovada é sempre a contada.
+5. Na aprovação o servidor confere, dentro do bloqueio que já existe: perfil, quem contou (pelo **identificador fixo da conta**, veja abaixo), versão da solicitação, saldo atual e última movimentação do item. Se o item mudou depois da contagem, a solicitação vai para Reconferir sem alterar nada. Aprovada, grava um **Ajuste** no Histórico (saldo anterior, saldo final, nº da contagem, quem contou, quem aprovou) e o saldo novo.
+6. Situações: Pendente, Aprovada, Rejeitada, Reconferir, Cancelada (quem contou cancela enquanto está pendente). Decidida, não muda mais.
+
+**Aprovação independente.** Cada conta tem um **ID da conta** (coluna nova na aba Usuarios, `C-` + 16 caracteres), gerado pelo sistema uma vez e nunca reaproveitado: não muda quando o login ou o nome mudam, e um login apagado e recriado com o mesmo nome recebe outro ID (a sessão antiga cai). A contagem guarda o ID de quem contou e a decisão, o de quem decidiu. Quem contou não decide a própria contagem, sem exceção: o bloqueio vale pelo ID e, por segurança, também pelo login. O nome de exibição não é usado. Linha copiada à mão na aba Usuarios (ID repetido) recebe ID novo na hora, com registro na Auditoria. Para funcionar, cada pessoa da Administração precisa de **login individual**: com um login só, as contagens dele ficam pendentes (a tela de Aprovações avisa). Login compartilhado anula a separação e não deve ser usado.
+
+**Recuperação de falhas.** A aprovação grava em etapas com um identificador de operação: marca a solicitação, grava o histórico, grava o saldo (valor absoluto) e conclui. Se o script parar no meio, a operação é terminada (ou desfeita, se nada foi gravado) sem aplicar duas vezes, de dois jeitos: antes de qualquer gravação de qualquer pessoa e pela **verificação automática** (abaixo). A resposta só diz "aprovado" depois de conferir saldo e solicitação.
+
+**Verificação automática (`recuperarOperacoesPendentes`).** Roda por um acionador de tempo a cada 10 minutos, dentro do mesmo bloqueio das gravações (se o sistema estiver ocupado, espera até 30 s e, sem conseguir, tenta na rodada seguinte sem mexer em nada). Em cada rodada:
+- procura toda solicitação em etapa "aplicando" (mesmo se a marca de operação aberta tiver se perdido) e termina ou desfaz pelo identificador da operação;
+- confere se alguma importação parou no meio e avisa a Administração;
+- compara o saldo de cada item com o último saldo gravado pelo próprio sistema (guardado nas propriedades do script, fora da planilha). Diferença = edição direta na planilha ou gravação interrompida;
+- grava o resultado (Administração → Aprovações de estoque → "Verificação automática") e, quando há novidade, a Auditoria.
+
+Quando a consistência não pode ser restabelecida (saldo que não bate nem com o antes nem com o aprovado, ou saldo mudado fora do sistema), o item fica **bloqueado**: nenhuma saída, entrada, troca, empréstimo, devolução, estorno, contagem, edição, exclusão, aprovação ou importação é aceita nele. A equipe vê "Bloqueado" no item. A Administração revisa em **Aprovações de estoque → Itens bloqueados** e libera, sempre descrevendo o que conferiu: **Manter o saldo atual** (a diferença feita fora do sistema entra no Histórico como Ajuste decidido por ela) ou **Restaurar o saldo do sistema** (volta ao último valor gravado pelo sistema). Item apagado direto na planilha vira alerta. Tudo vai para a Auditoria.
+
+O acionador **não** é instalado sozinho. Pelo editor do Apps Script: `instalarRecuperacao()` instala (e já roda uma vez), `removerRecuperacao()` tira só esse acionador. Antes de remover ou criar qualquer acionador, `instalarRecuperacao()` confere o ambiente e, se algo falhar, para sem mexer em nada:
+- **planilha oficial**: só com a propriedade `LIBERAR_ACIONADOR_OFICIAL` = `sim` (criada à mão, com autorização) e sem `AMBIENTE` = `homologacao`;
+- **qualquer outra planilha**: só a cópia de homologação, com `AMBIENTE` exatamente `homologacao`, `HOMOLOG_PLANILHA_ID` igual ao ID da planilha ativa, nome com "HOMOLOGAÇÃO" e ID diferente do da oficial.
+
+A instalação fica registrada na Auditoria. A rotina `recuperarOperacoesPendentes()` em si não depende dessas propriedades (roda igual na produção). Sem o acionador, a recuperação continua acontecendo antes de cada gravação.
+
+**Caminhos fechados.** Editar um item não muda o estoque (o campo fica travado; a quantidade nova vira solicitação). Item novo nasce com 0 e a quantidade inicial vai para aprovação. **Importar inventário** atualiza só o cadastro (nome, local, categoria, mínimo) e manda as diferenças para aprovação; linhas iguais viram Conferência; itens novos entram com 0; no modo "substituir", itens fora da lista com saldo vão para aprovação de zerar e só saem do cadastro depois de aprovados. O histórico antigo da planilha (compras e retiradas) fica guardado na solicitação e entra com a aprovação, com as datas originais e sem repetir (regras em **Importar inventário**). Ajustes e conferências não podem ser estornados (se houver erro, nova contagem). Só item com estoque 0 pode ser excluído.
+
+**Auditoria.** Cada envio, aprovação, rejeição, reconferência, cancelamento, tentativa negada e recuperação vai para a aba Auditoria com item, solicitação, quem contou, quem decidiu, saldo, contado, diferença, quantidade final, justificativa e resultado.
+
+**Planilha.** Aba nova **Contagens** (criada por `autorizar`), com as colunas "Contado por (ID da conta)" e "Decidido por (ID da conta)" no fim. Colunas novas no fim de **Movimentacoes**: Contagem, Operação, Saldo anterior, Saldo final, Aprovado por. Coluna nova em **Usuarios**: ID da conta. Coluna nova em **Perfis**: Registrar contagens. Nada existente é apagado.
+
+## Proteção da planilha (configuração manual)
+
+O site grava pelo Apps Script, que roda como o **dono da planilha** (implantação "Executar como: eu"). Por isso, proteger as abas deixando só o dono como editor **não atrapalha** o sistema, e impede qualquer outra pessoa de mexer em saldos, histórico, contagens, usuários e auditoria. O dono continua podendo editar tudo; essas edições do dono no saldo são detectadas pela verificação automática e bloqueiam o item.
+
+1. **Implantação**: em Implantar → Gerenciar implantações, confira "Executar como: **eu** (dono)". Se outra conta implantar, as gravações falham nas abas protegidas.
+2. **Compartilhamento da planilha**: deixe **só o dono** como Editor. Quem é Editor da planilha também edita o Apps Script dela (pode mudar o código e ler as propriedades do script, onde ficam o segredo das senhas e as sessões). Em Compartilhar → engrenagem, desmarque "Editores podem mudar permissões e compartilhar" e "Leitores e comentaristas podem ver a opção de baixar, imprimir e copiar". Evite dar acesso de leitura: o leitor vê todas as abas, inclusive as ocultas (Usuarios com códigos de senha e telefones, Auditoria, Acessos). A equipe e o síndico usam o site.
+3. **Abas protegidas**: rode `protegerPlanilha()` pelo editor (ou faça à mão em Dados → Proteger páginas e intervalos → cada aba → "Restringir quem pode editar" → **Somente você**). Não use "Mostrar um aviso": ele não impede a edição. Abas: Itens, Movimentacoes, Contagens, Emprestimos, Usuarios, Perfis, Config, OS, Demandas, Preventivas, Pendencias, Auditoria, Acessos e as cópias "Itens (cópia de …)".
+4. **Conferir**: `verificarProtecao()` só lê e lista quem tem acesso, abas sem proteção e proteções que só avisam.
+5. **Ocultar aba não protege** nada.
+6. **Conta do dono**: verificação em duas etapas ligada. Para investigar um item bloqueado, Arquivo → Histórico de versões mostra quem mudou a célula.
+
+
 ## Segurança
 
 - **Senhas protegidas.** A coluna Senha da aba Usuarios guarda só um código (hash `h1$…` com sal próprio por pessoa, 3.000 rodadas de HMAC-SHA256 e um segredo que fica nas propriedades do script, fora da planilha). A tela de usuários não mostra mais senhas: ao editar, o campo **Nova senha** em branco mantém a atual. Senhas novas têm no mínimo 6 caracteres. Se for preciso redefinir uma senha direto na planilha, basta digitá-la na coluna Senha: ela vale uma vez em texto e vira código na primeira entrada. A função `autorizar` converte todas as senhas antigas.
@@ -108,7 +155,27 @@ Sem PDF, o site lê a **foto** da nota com reconhecimento de texto (Tesseract.js
 
 ## Importar inventário
 
-Em **Itens → Importar inventário**, envie a planilha da contagem (.xlsx ou .csv). O sistema acha as colunas pelo título (Código, Item, Especificação, Categoria, Tipo, Un., Saldo atual ou Quantidade, Estoque mínimo, Localização, Observações), mostra uma prévia e grava a diferença de cada item como ajuste no histórico. Antes de gravar, guarda uma cópia oculta da aba Itens.
+Em **Itens → Importar inventário**, envie a planilha da contagem (.xlsx ou .csv). O sistema acha as colunas pelo título (Código, Item, Especificação, Categoria, Tipo, Un., Saldo atual ou Quantidade, Estoque mínimo, Localização, Observações) e mostra uma prévia. **Nenhum saldo muda na importação**: diferenças vão para aprovação, iguais viram Conferência, itens novos entram com 0. Antes de gravar, guarda uma cópia oculta (e protegida) da aba Itens.
+
+Regras de integridade:
+- **Saldo**: o saldo final é sempre a quantidade contada e aprovada (valor absoluto). O histórico antigo entra só como registro; o Ajuste completa a diferença (para item novo, é o "Saldo inicial", na data mais antiga do histórico). Por isso o saldo nunca soma nada duas vezes.
+- **Datas**: cada linha do histórico precisa de uma data real (dia que existe no calendário, de 2000 até hoje). Linha sem data, com data impossível ou futura fica de fora e é contada na mensagem; nunca vira "hoje".
+- **Sem duplicar**: um lançamento antigo (item, compra ou retirada, data, quantidade) não entra se já existir no histórico, seja de importação anterior ou registrado à mão no sistema; a conferência é feita na importação e de novo na aprovação. Duas compras iguais no mesmo dia na planilha entram as duas, uma vez cada. Estornados não contam.
+- **Itens**: linha com código usa o código; linha sem código reconhece o item do setor com o mesmo nome (assim reimportar não cria item repetido). Nome repetido sem código, ou o mesmo item duas vezes na planilha, recusa a importação inteira sem gravar nada. Histórico com nome que aparece em duas linhas fica de fora (ambíguo).
+- **Repetição**: a mesma planilha enviada de novo pede confirmação. Item com ajuste pendente ou bloqueado é pulado (não ganha segunda solicitação). Aprovação parcial do lote é segura: o que foi aprovado não volta, o que foi rejeitado volta na próxima importação, o pendente é pulado.
+- **Falha no meio**: tudo é validado antes da primeira gravação; a aba Itens é gravada numa única escrita (sem apagar antes); solicitações e conferências, cada uma numa escrita. Se o script parar no meio, a verificação automática avisa e basta importar a mesma planilha de novo: os itens já criados são reconhecidos, as solicitações não se repetem e nada é lançado em dobro.
+
+## Implantação do inventário na produção
+
+O código do Apps Script está todo em `apps-script/Codigo.gs`. Os arquivos `AutomacaoPreventivas.gs` e `BackupAutomatico.gs` existem só no Apps Script oficial e continuam lá, sem mudança. Rotinas de preparação de ambientes de teste não fazem parte desta branch e nunca são instaladas na produção.
+
+Ordem, sempre com autorização e numa janela sem uso do sistema:
+1. Backup: versão nomeada no histórico da planilha, cópia da planilha numa pasta privada, download .xlsx guardado em local privado, número da versão ativa da implantação, print dos acionadores e lista dos nomes das propriedades do script.
+2. Cole o `Codigo.gs` desta branch no `Código.gs` do Apps Script oficial e rode `autorizar` pelo editor, aceitando as permissões (o código agora pode criar acionadores). Ele cria a aba Contagens, as colunas novas, os IDs das contas e o primeiro retrato dos saldos.
+3. Implantar → Gerenciar implantações → editar a implantação existente → Nova versão. O link não muda e o `config.js` não muda.
+4. Atualize a `main` com esta branch (o GitHub Pages publica em alguns minutos) e peça para todos recarregarem o site.
+5. Acionador e proteções, cada um só com autorização própria: crie `LIBERAR_ACIONADOR_OFICIAL` = `sim`, rode `instalarRecuperacao` e apague a propriedade depois; rode `verificarProtecao` antes de qualquer `protegerPlanilha`.
+6. Para voltar atrás: `removerRecuperacao`; Gerenciar implantações → versão anterior; cole de volta o `Código.gs` anterior no editor; desfaça o commit na `main`. Abas, colunas e registros novos ficam e não atrapalham a versão anterior.
 
 ## Se mudar o código do Apps Script
 

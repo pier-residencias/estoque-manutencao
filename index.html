@@ -54,6 +54,7 @@
     <button role="tab" data-tab="os" aria-selected="false">OS <span class="badge" id="b-os">0</span></button>
     <button role="tab" data-tab="registrar" aria-selected="false">Registrar</button>
     <button role="tab" data-tab="itens" aria-selected="false">Itens <span class="badge" id="b-itens">0</span></button>
+    <button role="tab" data-tab="contagem" aria-selected="false">Contagem <span class="badge alert" id="b-cont" hidden>0</span></button>
     <button role="tab" data-tab="historico" aria-selected="false">Histórico</button>
     <button role="tab" data-tab="emprestimos" aria-selected="false">Empréstimos <span class="badge" id="b-emp">0</span></button>
     <button role="tab" data-tab="dashboard" aria-selected="false">Dashboard</button>
@@ -65,6 +66,8 @@
     <div class="mh">Pendências</div>
     <button type="button" role="menuitem" data-adm-tab="pendencias"><b>Controle de pendências</b><span>Lista do síndico: situação, responsável e prazo</span></button>
     <button type="button" role="menuitem" data-adm-tab="pendencias" data-adm-acao="nova"><b>Incluir pendência</b><span>Registrar uma pendência nova na lista</span></button>
+    <div class="mh" data-grupo="estoque">Estoque</div>
+    <button type="button" role="menuitem" data-adm-tab="aprovacoes"><b>Aprovações de estoque <span class="badge alert" id="b-aprov" hidden>0</span></b><span>Ajustes de contagem que aguardam a Administração</span></button>
     <div class="mh" data-grupo="equipe">Equipe</div>
     <button type="button" role="menuitem" data-adm-tab="usuarios"><b>Usuários e permissões</b><span>Logins, perfis e o que cada um pode fazer</span></button>
     <button type="button" role="menuitem" data-adm-tab="acessos"><b>Histórico de acessos</b><span>Quem entrou no sistema, quando e de onde</span></button>
@@ -305,6 +308,49 @@
   </section>
 
   <!-- HISTÓRICO -->
+  <!-- CONTAGEM DE ESTOQUE (equipe) -->
+  <section id="t-contagem" hidden>
+    <div class="sec-head"><h2 class="sec">Contagem de estoque<span class="setor-nome"></span></h2><span class="muted">Conte o que está guardado e digite a quantidade. Se for igual ao sistema, fica registrado como conferido. Se for diferente, explique o motivo: a Administração aprova antes de o estoque mudar.</span></div>
+    <div id="ct-avisos"></div>
+    <div class="toolbar">
+      <input class="input" id="ct-busca" placeholder="Buscar item, código ou local" type="search">
+      <select class="input" id="ct-local" aria-label="Local"></select>
+      <select class="input" id="ct-cat" aria-label="Categoria"></select>
+    </div>
+    <div class="tablebox ct-tab"><table>
+      <thead><tr><th>Item</th><th class="n">No sistema</th><th>Contei</th><th>Resultado</th><th>Justificativa</th></tr></thead>
+      <tbody id="ct-body"></tbody>
+    </table></div>
+    <div class="ct-barra"><span id="ct-resumo" class="muted"></span><button class="btn" type="button" id="ct-limpar" hidden>Limpar</button><button class="btn primary" type="button" id="ct-enviar" disabled>Enviar contagem</button></div>
+    <h3 class="sub-sec">Minhas contagens</h3>
+    <div class="tablebox"><table>
+      <thead><tr><th>Nº</th><th>Item</th><th class="n">Sistema → contado</th><th>Situação</th><th class="hide-s">Contado em</th><th class="hide-m">Decisão</th><th></th></tr></thead>
+      <tbody id="ct-minhas"></tbody>
+    </table></div>
+  </section>
+
+  <!-- APROVAÇÕES DE ESTOQUE (menu Administração) -->
+  <section id="t-aprovacoes" hidden>
+    <div class="sec-head"><h2 class="sec">Aprovações de estoque</h2><span class="muted">O saldo só muda depois de aprovado. Quem contou não aprova a própria contagem. Se o item teve movimentação depois da contagem, ela vai para Reconferir.</span></div>
+    <div class="ap-stats" id="ap-stats"></div>
+    <div id="ap-integ"></div>
+    <div id="ap-ultimos"></div>
+    <div class="ap-bulk" id="ap-bulk"></div>
+    <div class="ap-lista" id="ap-lista"></div>
+    <h3 class="sub-sec">Histórico de decisões</h3>
+    <div class="chips" id="ap-filtro" style="margin-bottom:12px">
+      <button class="chip" data-f="Aprovada" aria-pressed="true">Aprovadas</button>
+      <button class="chip" data-f="Rejeitada" aria-pressed="false">Rejeitadas</button>
+      <button class="chip" data-f="Reconferir" aria-pressed="false">Reconferir</button>
+      <button class="chip" data-f="Cancelada" aria-pressed="false">Canceladas</button>
+      <button class="chip" data-f="" aria-pressed="false">Todas</button>
+    </div>
+    <div class="tablebox"><table>
+      <thead><tr><th>Nº</th><th>Item</th><th class="n">Sistema → contado</th><th>Situação</th><th class="hide-s">Contou</th><th class="hide-s">Decidiu</th><th class="hide-m">Motivo</th></tr></thead>
+      <tbody id="ap-hist"></tbody>
+    </table></div>
+  </section>
+
   <section id="t-historico" hidden>
     <div class="sec-head"><h2 class="sec">Histórico<span class="setor-nome"></span></h2><span class="muted">Tudo que entrou e saiu, com quem registrou.</span></div>
     <div class="toolbar">
@@ -466,7 +512,7 @@
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script src="config.js"></script>
-<script src="nfe.js?v=20261015s"></script>
-<script src="app.js?v=20261015s"></script>
+<script src="nfe.js?v=20261017a"></script>
+<script src="app.js?v=20261017a"></script>
 </body>
 </html>
